@@ -11,6 +11,8 @@ export class TgBot {
   constructor(api) {
     this.api = api
     this.bot = new Telegraf(tg_token)
+
+    this.pageSize = 5
   }
 
   /**
@@ -39,16 +41,31 @@ export class TgBot {
    * Register handlers
    */
   initHandlers() {
+    // Commands
     this.bot.start(context => this.handleStart(context))
     this.bot.command('subs', context => this.handleSubscriptions(context))
+
+    // Actions: subscriptions navigation
     this.bot.action(/subsPage:(\d+)/, context => this.handleSubscriptionsPage(context))
+
+    // Actions: single subscribe/unsubscribe
+    this.bot.action(/sub:(\d+)/, context => this.handleSubscribe(context))
     this.bot.action(/unsub:(\d+)/, context => this.handleUnsubConfirm(context))
     this.bot.action(/confirmUnsub:(\d+)/, context => this.handleUnsubExecute(context))
-    this.bot.action(/sub:(\d+)/, context => this.handleSubscribe(context))
+
+    // Actions: unsubscribe all
+    this.bot.action('unsubAllConfirm', context => this.handleUnsubAllConfirm(context))
+    this.bot.action('unsubAllExecute', context => this.handleUnsubAllExecute(context))
+    this.bot.action('cancelUnsubAll', async context => {
+      await context.reply('Хорошо 👍 Подписки остались без изменений')
+    })
+
+    // Plain text handler (article IDs etc.)
     this.bot.on('text', context => this.handleText(context))
 
+    // Global error handler
     this.bot.catch(async (err, context) => {
-      console.error('[TgBot] Error:', err)
+      console.error('[TgBot] Error for user', context.from?.id, err)
       try {
         await context.reply('⚠️ Ошибка, попробуй чуть позже')
       } catch (e) {
@@ -279,8 +296,7 @@ export class TgBot {
 
     const total = user.subscriptions.length
     const articleList = user.subscriptions.join(', ')
-    const pageSize = 10
-    const firstBatch = Math.min(total, pageSize)
+    const firstBatch = Math.min(total, this.pageSize)
 
     await context.reply(
       `📋 У тебя ${this.formatSubscriptionsCount(total)}.\n\n` +
@@ -288,12 +304,14 @@ export class TgBot {
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: `📦 Показать товары (${firstBatch})`, callback_data: `subsPage:0` }]
+            [{ text: `📦 Показать товары (${firstBatch})`, callback_data: `subsPage:0` }],
+            [{ text: '❌ Отписаться от всех', callback_data: 'unsubAllConfirm' }]
           ]
         }
       }
     )
   }
+
 
   /**
    * Show subscription products page
@@ -309,11 +327,8 @@ export class TgBot {
       return
     }
 
-    const parts = context.match[1].split(':')
-    const offset = Number(parts[0]) || 0
-    const pageSize = 10
-
-    const productIds = user.subscriptions.slice(offset, offset + pageSize)
+    const offset = Number(context.match[1]) || 0
+    const productIds = user.subscriptions.slice(offset, offset + this.pageSize)
     const products = await this.api.getProducts(productIds)
 
     for (const product of products) {
@@ -329,7 +344,7 @@ export class TgBot {
       })
     }
 
-    const nextOffset = offset + pageSize
+    const nextOffset = offset + this.pageSize
 
     if (nextOffset < user.subscriptions.length) {
       await context.reply(
@@ -343,7 +358,16 @@ export class TgBot {
         }
       )
     } else {
-      await context.reply('Все подписки показаны ✅')
+      await context.reply(
+        'Все подписки показаны ✅',
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '❌ Отписаться от всех', callback_data: 'unsubAllConfirm' }]
+            ]
+          }
+        }
+      )
     }
   }
 
@@ -369,6 +393,41 @@ export class TgBot {
     }
 
     return `${count} подписок`
+  }
+
+  /**
+   * Ask confirmation for unsubscribing from all
+   * @param {import('telegraf').Context} context
+   */
+  async handleUnsubAllConfirm(context) {
+    await context.reply(
+      '⚠️ Ты уверен? Это удалит все твои подписки, и я перестану присылать обновления.\n\n' +
+      'Выбери действие:',
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Да, я всё понимаю, удалить все', callback_data: 'unsubAllExecute' }],
+            [{ text: '❌ Я передумал, оставить подписки', callback_data: 'cancelUnsubAll' }]
+          ]
+        }
+      }
+    )
+  }
+
+  /**
+   * Execute unsubscribe from all
+   * @param {import('telegraf').Context} context
+   */
+  async handleUnsubAllExecute(context) {
+    const userId = context.from.id
+    const users = this.api.db.collection('users')
+
+    await users.updateOne(
+      { _id: userId },
+      { $set: { subscriptions: [] } }
+    )
+
+    await context.reply('Все твои подписки удалены ❌')
   }
 
 }
