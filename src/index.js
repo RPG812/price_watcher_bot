@@ -15,6 +15,8 @@ await api.setupMongo()
 // }
 
 const bot = new TgBot(api)
-await bot.start()
+bot.start().catch((e) => console.error(e))
+
+await api.startPriceWatcher(bot)
 
 console.log('DONE')

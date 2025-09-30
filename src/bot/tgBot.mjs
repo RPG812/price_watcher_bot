@@ -156,7 +156,9 @@ export class TgBot {
     if (/^\d+$/.test(text)) {
       await this.handleArticleInput(context, Number(text))
     } else {
-      await context.reply('Пришли артикул (число)')
+      await context.reply('К сожалению, я тебя не понял. Вот тебе меню')
+
+      await this.showMainMenu(context)
     }
   }
 
@@ -347,8 +349,8 @@ export class TgBot {
   async handleSubscriptionsPage(context) {
     const userId = context.from.id
     const users = this.api.db.collection('users')
-
     const user = await users.findOne({ _id: userId })
+
     if (!user || user.subscriptions.length === 0) {
       await context.reply('Подписок больше нет 📭')
       return
@@ -360,6 +362,7 @@ export class TgBot {
 
     for (const product of products) {
       const cardMessage = this.formatProductCard(product)
+
       await context.replyWithPhoto(cardMessage.photo, {
         caption: `${cardMessage.caption}\n\n✅ Ты подписан на этот товар`,
         parse_mode: cardMessage.parse_mode,
@@ -457,4 +460,40 @@ export class TgBot {
     await context.reply('Все твои подписки удалены ❌')
   }
 
+  /**
+   * @param {object} user
+   * @param {ProductCard} product
+   * @returns {Promise<void>}
+   */
+  async notifyPriceChange(user, product) {
+    let diffLine = '💰 Цена изменилась'
+
+    if (product.history && product.history.length > 0) {
+      const lastEntry = product.history[product.history.length - 1]
+
+      if (lastEntry && lastEntry.priceCurrent !== product.priceCurrent) {
+        diffLine = `💰 Цена изменилась: ${lastEntry.priceCurrent} ₽ → ${product.priceCurrent} ₽`
+      }
+    } else {
+      diffLine = `💰 Новая цена: ${product.priceCurrent} ₽`
+    }
+
+    const cardMessage = this.formatProductCard(product)
+
+    try {
+      await this.bot.telegram.sendPhoto(user._id, cardMessage.photo, {
+        caption: `${diffLine}\n\n${cardMessage.caption}`,
+        parse_mode: cardMessage.parse_mode,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '❌ Отписаться', callback_data: `unsub:${product.id}` }]
+          ]
+        }
+      })
+
+      console.log(`[TgBot] notified user ${user._id} about price change for ${product.id}`)
+    } catch (e) {
+      console.error(`[TgBot] failed to notify user ${user._id}:`, e.message)
+    }
+  }
 }

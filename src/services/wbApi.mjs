@@ -52,6 +52,11 @@ export class WbApi {
     this.dbName = 'wb'
     this.dbClient = null
     this.db = null
+
+    this.priceWatcherId = null
+    this.watchInterval = 60 * 1000
+    this.threshold = 60 * 1000
+    // this.threshold = 30 * 60 * 1000
   }
 
   /**
@@ -122,6 +127,7 @@ export class WbApi {
    */
   async getProducts(ids) {
     const url = this.buildUrl(ids)
+
     try {
       const res = await fetch(url, { headers: HEADERS })
 
@@ -276,7 +282,8 @@ export class WbApi {
         category: card.category,
         stock: card.stock,
         rating: card.rating,
-        feedbacks: card.feedbacks
+        feedbacks: card.feedbacks,
+        lastCheckedAt: new Date()
       },
       $setOnInsert: {
         history: [{
@@ -312,7 +319,7 @@ export class WbApi {
 
     const last = product.history[0]
 
-    return last.priceCurrent !== card.priceCurrent || last.priceOriginal !== card.priceOriginal
+    return last.priceCurrent !== card.priceCurrent
   }
 
   /**
@@ -342,4 +349,88 @@ export class WbApi {
     console.log(`[mongo] price updated for ${card.name}: ${entry.priceCurrent}`)
   }
 
+  /**
+   * Periodic price checker
+   * @param {import('./tgBot.mjs').TgBot} bot
+   */
+  async startPriceWatcher(bot) {
+    if (this.priceWatcherId) {
+      console.warn('[WbApi] price watcher already running, skipping start')
+      return
+    }
+
+    console.log(`[WbApi] starting price watcher (${this.watchInterval / 1000}s interval)`)
+
+    this.priceWatcherId = setInterval(() => this.checkPrices(bot), this.watchInterval)
+  }
+
+  /**
+   * Stop periodic price checker
+   */
+  stopPriceWatcher() {
+    if (this.priceWatcherId) {
+      clearInterval(this.priceWatcherId)
+      this.priceWatcherId = null
+      console.log('[WbApi] price watcher stopped')
+    }
+  }
+
+  /**
+   * Check all products that need update
+   * @param {import('./tgBot.mjs').TgBot} bot
+   */
+  async checkPrices(bot) {
+    try {
+      const usersCol = this.db.collection('users')
+      const productsCol = this.db.collection('products')
+
+      const users = await usersCol.find({ subscriptions: { $exists: true, $ne: [] } }).toArray()
+      const subscribedIds = [...new Set(users.flatMap(u => u.subscriptions))]
+
+      if (subscribedIds.length === 0) {
+        console.log('[WbApi] no subscribed products, skipping check')
+        return
+      }
+
+      const threshold = new Date(Date.now() - this.threshold)
+
+      const productsToCheck = await productsCol
+        .find({
+          _id: { $in: subscribedIds },
+          lastCheckedAt: { $lt: threshold }
+        })
+        .limit(100)
+        .toArray()
+
+      if (productsToCheck.length === 0) {
+        return
+      }
+
+      console.log(`[WbApi] checking ${productsToCheck.length} products`)
+
+      const ids = productsToCheck.map(p => p._id)
+      const products = await this.getProducts(ids)
+
+      for (const card of products) {
+        const hasChanged = await this.checkPriceChange(card)
+
+        await this.updatePrice(card)
+
+        await productsCol.updateOne(
+          { _id: card.id },
+          { $set: { lastCheckedAt: new Date() } }
+        )
+
+        if (hasChanged) {
+          const affectedUsers = users.filter(u => u.subscriptions.includes(card.id))
+
+          for (const user of affectedUsers) {
+            await bot.notifyPriceChange(user, card)
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[WbApi] checkPrices error:', e.message)
+    }
+  }
 }
