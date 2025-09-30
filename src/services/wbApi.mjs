@@ -31,10 +31,12 @@ const DEFAULT_PARAMS = {
  * @property {string} name
  * @property {string} brand
  * @property {string} supplier
+ * @property {string} category
  * @property {number} priceCurrent
  * @property {number} priceOriginal
  * @property {number} rating
  * @property {number} feedbacks
+ * @property {number} stock
  * @property {string} imageURL
  * @property {string|null} image
  * @property {string} link
@@ -120,21 +122,38 @@ export class WbApi {
    */
   async getProducts(ids) {
     const url = this.buildUrl(ids)
-    const res = await fetch(url, { headers: HEADERS })
-    const data = await res.json()
+    try {
+      const res = await fetch(url, { headers: HEADERS })
 
-    if (!data.products) {
+      if (!res.ok) {
+        console.warn(`[getProducts] fetch failed: ${res.status}`)
+        return []
+      }
+
+      const data = await res.json()
+
+      if (!data.products) {
+        return []
+      }
+
+      const result = []
+
+      for (const product of data.products) {
+        try {
+          const card = await this.getCard(product)
+          result.push(card)
+        } catch (e) {
+          console.error(`[getProducts] error building card id=${product.id}:`, e.message)
+        }
+      }
+
+      return result
+    } catch (e) {
+      console.error(`[getProducts] fetch error:`, e.message)
       return []
     }
-
-    const result = []
-    for (const product of data.products) {
-      const card = await this.getCard(product)
-      result.push(card)
-    }
-
-    return result
   }
+
 
   /**
    * @param {object} product - raw product data from WB API
@@ -146,21 +165,26 @@ export class WbApi {
     const image = await this.getImageStr(imageURL)
 
     const size = product.sizes?.[0]?.price || {}
+    const priceOriginal = size.basic ? size.basic / 100 : 0
+    const priceCurrent = size.product ? size.product / 100 : 0
 
     return {
       id,
       name: product.name || '',
       brand: product.brand || '',
       supplier: product.supplier || '',
-      priceCurrent: size.product ? size.product / 100 : 0,
-      priceOriginal: size.basic ? size.basic / 100 : 0,
-      rating: Number(product.rating) || 0,
-      feedbacks: Number(product.feedbacks) || 0,
+      category: product.entity || '',
+      priceCurrent,
+      priceOriginal,
+      rating: Number(product.nmReviewRating || product.rating) || 0,
+      feedbacks: Number(product.nmFeedbacks || product.feedbacks) || 0,
+      stock: Number(product.totalQuantity) || 0,
       imageURL,
       image,
       link: `https://www.wildberries.ru/catalog/${id}/detail.aspx`
     }
   }
+
 
   /**
    * @param {Array<string|number>} ids
@@ -215,50 +239,64 @@ export class WbApi {
       return null
     }
 
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+    try {
+      const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
 
-    if (res.ok) {
+      if (!res.ok) {
+        console.warn(`[getImageStr] failed: ${url} (${res.status})`)
+        return null
+      }
+
       const arrayBuffer = await res.arrayBuffer()
       const buffer = Buffer.from(arrayBuffer)
 
       return `data:image/webp;base64,${buffer.toString('base64')}`
+    } catch (e) {
+      console.error(`[getImageStr] fetch error: ${url}`, e.message)
+      return null
     }
-
-    return null
   }
 
   /**
+   * Save or update product in DB
    * @param {ProductCard} card
    * @returns {Promise<void>}
    */
   async saveProduct(card) {
     const collection = this.db.collection('products')
-    const existing = await collection.findOne({ _id: card.id })
 
-    if (!existing) {
-      const entry = {
-        _id: card.id,
+    const update = {
+      $set: {
         name: card.name,
         brand: card.brand,
         supplier: card.supplier,
         link: card.link,
         imageURL: card.imageURL,
         image: card.image,
-        history: [
-          {
-            date: new Date(),
-            priceCurrent: card.priceCurrent,
-            priceOriginal: card.priceOriginal,
-            dest: DEFAULT_PARAMS.dest // TODO
-          }
-        ]
+        category: card.category,
+        stock: card.stock,
+        rating: card.rating,
+        feedbacks: card.feedbacks
+      },
+      $setOnInsert: {
+        history: [{
+          date: new Date(),
+          priceCurrent: card.priceCurrent,
+          priceOriginal: card.priceOriginal,
+          dest: DEFAULT_PARAMS.dest
+        }]
       }
-
-      await collection.insertOne(entry)
-
-      console.log(`[mongo] saved new product: ${card.name}`)
     }
+
+    await collection.updateOne(
+      { _id: card.id },
+      update,
+      { upsert: true }
+    )
+
+    console.log(`[mongo] product ${card.id} saved`)
   }
+
 
   /**
    * @param {ProductCard} card

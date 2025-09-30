@@ -40,11 +40,21 @@ export class TgBot {
    */
   initHandlers() {
     this.bot.start(context => this.handleStart(context))
-    this.bot.on('text', context => this.handleText(context))
     this.bot.command('subs', context => this.handleSubscriptions(context))
+    this.bot.action(/subsPage:(\d+)/, context => this.handleSubscriptionsPage(context))
     this.bot.action(/unsub:(\d+)/, context => this.handleUnsubConfirm(context))
     this.bot.action(/confirmUnsub:(\d+)/, context => this.handleUnsubExecute(context))
     this.bot.action(/sub:(\d+)/, context => this.handleSubscribe(context))
+    this.bot.on('text', context => this.handleText(context))
+
+    this.bot.catch(async (err, context) => {
+      console.error('[TgBot] Error:', err)
+      try {
+        await context.reply('⚠️ Ошибка, попробуй чуть позже')
+      } catch (e) {
+        console.error('[TgBot] Failed to reply on error:', e.message)
+      }
+    })
   }
 
   /**
@@ -194,20 +204,22 @@ export class TgBot {
    * @returns {{ photo: string, caption: string, parse_mode: string }}
    */
   formatProductCard(product) {
-    const priceLine = product.priceOriginal > product.priceCurrent
-      ? `💰 Цена: ${product.priceCurrent} ₽  ~~${product.priceOriginal} ₽~~`
-      : `💰 Цена: ${product.priceCurrent} ₽`
-
     const ratingLine = product.rating
-      ? `⭐️ Рейтинг: ${product.rating} (${product.feedbacks} отзывов)`
+      ? `⭐️ ${product.rating} (${product.feedbacks} отзывов)`
       : ''
 
+    const stockLine = product.stock > 0
+      ? `📦 В наличии: ${product.stock} шт.`
+      : '❌ Нет в наличии'
+
     const caption =
-      `📦 ${product.name}\n` +
+      `📦 ${product.name}\n\n` +
+      `💰 Цена: ${product.priceCurrent} ₽` + '\n\n' +
       (product.brand ? `🏷 Бренд: ${product.brand}\n` : '') +
-      priceLine + '\n' +
+      (product.supplier ? `👤 Продавец: ${product.supplier}\n` : '') +
       (ratingLine ? ratingLine + '\n' : '') +
-      `🔗 [Открыть на WB](${product.link})`
+      (stockLine ? stockLine + '\n' : '') +
+      `\n 🔗 [Открыть на WB](${product.link})`
 
     return {
       photo: product.imageURL,
@@ -216,30 +228,6 @@ export class TgBot {
     }
   }
 
-  /**
-   * Handle /subs command
-   * @param {import('telegraf').Context} context
-   */
-  async handleSubscriptions(context) {
-    const userId = context.from.id
-    const users = this.api.db.collection('users')
-
-    const user = await users.findOne({ _id: userId })
-
-    if (!user || user.subscriptions.length === 0) {
-      await context.reply('У тебя пока нет подписок 📭')
-      return
-    }
-
-    const products = await this.api.getProducts(user.subscriptions)
-
-    let msg = '📋 Твои подписки:\n\n'
-    for (const product of products) {
-      msg += `— ${product.name} (${product.id}): ${product.priceCurrent} ₽\n`
-    }
-
-    await context.reply(msg)
-  }
 
   /**
    * Ask confirmation for unsubscribe
@@ -273,4 +261,114 @@ export class TgBot {
 
     await context.reply(`Ты отписался от товара ${productId} ❌`)
   }
+
+  /**
+   * Handle /subs command: show subscriptions with pagination
+   * @param {import('telegraf').Context} context
+   */
+  async handleSubscriptions(context) {
+    const userId = context.from.id
+    const users = this.api.db.collection('users')
+
+    const user = await users.findOne({ _id: userId })
+
+    if (!user || user.subscriptions.length === 0) {
+      await context.reply('У тебя пока нет подписок 📭')
+      return
+    }
+
+    const total = user.subscriptions.length
+    const articleList = user.subscriptions.join(', ')
+    const pageSize = 10
+    const firstBatch = Math.min(total, pageSize)
+
+    await context.reply(
+      `📋 У тебя ${this.formatSubscriptionsCount(total)}.\n\n` +
+      `Артикулы: ${articleList}`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: `📦 Показать товары (${firstBatch})`, callback_data: `subsPage:0` }]
+          ]
+        }
+      }
+    )
+  }
+
+  /**
+   * Show subscription products page
+   * @param {import('telegraf').Context} context
+   */
+  async handleSubscriptionsPage(context) {
+    const userId = context.from.id
+    const users = this.api.db.collection('users')
+
+    const user = await users.findOne({ _id: userId })
+    if (!user || user.subscriptions.length === 0) {
+      await context.reply('Подписок больше нет 📭')
+      return
+    }
+
+    const parts = context.match[1].split(':')
+    const offset = Number(parts[0]) || 0
+    const pageSize = 10
+
+    const productIds = user.subscriptions.slice(offset, offset + pageSize)
+    const products = await this.api.getProducts(productIds)
+
+    for (const product of products) {
+      const cardMessage = this.formatProductCard(product)
+      await context.replyWithPhoto(cardMessage.photo, {
+        caption: `${cardMessage.caption}\n\n✅ Ты подписан на этот товар`,
+        parse_mode: cardMessage.parse_mode,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '❌ Отписаться', callback_data: `unsub:${product.id}` }]
+          ]
+        }
+      })
+    }
+
+    const nextOffset = offset + pageSize
+
+    if (nextOffset < user.subscriptions.length) {
+      await context.reply(
+        `Показано ${nextOffset} из ${user.subscriptions.length}.`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '➡️ Загрузить ещё', callback_data: `subsPage:${nextOffset}` }]
+            ]
+          }
+        }
+      )
+    } else {
+      await context.reply('Все подписки показаны ✅')
+    }
+  }
+
+  /**
+   * Russian pluralization for word "подписка"
+   * @param {number} count
+   * @returns {string}
+   */
+  formatSubscriptionsCount(count) {
+    const lastDigit = count % 10
+    const lastTwo = count % 100
+
+    if (lastTwo >= 11 && lastTwo <= 19) {
+      return `${count} подписок`
+    }
+
+    if (lastDigit === 1) {
+      return `${count} подписка`
+    }
+
+    if (lastDigit >= 2 && lastDigit <= 4) {
+      return `${count} подписки`
+    }
+
+    return `${count} подписок`
+  }
+
 }
