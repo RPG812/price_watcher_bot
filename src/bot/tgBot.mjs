@@ -43,7 +43,15 @@ export class TgBot {
   initHandlers() {
     // Commands
     this.bot.start(context => this.handleStart(context))
+    this.bot.command('menu', context => this.showMainMenu(context))
     this.bot.command('subs', context => this.handleSubscriptions(context))
+
+    // Inline menu actions
+    this.bot.action('openSubs', context => this.handleSubscriptions(context))
+    this.bot.action('addProductHelp', async context => {
+      await context.reply('Пришли артикул WB, и я покажу карточку 📦')
+    })
+    this.bot.action('unsubAllConfirm', context => this.handleUnsubAllConfirm(context))
 
     // Actions: subscriptions navigation
     this.bot.action(/subsPage:(\d+)/, context => this.handleSubscriptionsPage(context))
@@ -72,6 +80,25 @@ export class TgBot {
         console.error('[TgBot] Failed to reply on error:', e.message)
       }
     })
+  }
+
+  /**
+   * Show main menu
+   * @param {import('telegraf').Context} context
+   */
+  async showMainMenu(context) {
+    await context.reply(
+      'Главное меню:',
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📋 Мои подписки', callback_data: 'openSubs' }],
+            [{ text: '➕ Добавить товар', callback_data: 'addProductHelp' }],
+            [{ text: '❌ Отписаться от всех', callback_data: 'unsubAllConfirm' }]
+          ]
+        }
+      }
+    )
   }
 
   /**
@@ -116,7 +143,7 @@ export class TgBot {
       )
     }
 
-    await context.reply('Пришли артикул WB, и я покажу карточку 📦')
+    await this.showMainMenu(context)
   }
 
   /**
