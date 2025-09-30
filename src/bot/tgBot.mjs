@@ -70,14 +70,16 @@ export class TgBot {
     this.bot.action('menu', context => this.showMainMenu(context))
     this.bot.action('unsubAllConfirm', context => this.handleUnsubAllConfirm(context))
     this.bot.action('unsubAllExecute', context => this.handleUnsubAllExecute(context))
-    this.bot.action('cancelUnsubAll', async context => {
-      await context.reply('Хорошо 👍 Подписки остались без изменений')
+    this.bot.action(['cancelUnsubAll', 'cancelUnsub'], async ctx => {
+      try {
+        await ctx.deleteMessage()
+      } catch (err) {
+        console.error('[TgBot] Failed to delete cancel message:', err.message)
+      }
     })
 
-    // Plain text handler (article IDs etc.)
     this.bot.on('text', context => this.handleText(context))
 
-    // Global error handler
     this.bot.catch(async (err, context) => {
       console.error('[TgBot] Error for user', context.from?.id, err)
       try {
@@ -302,6 +304,8 @@ export class TgBot {
    * Execute unsubscribe
    */
   async handleUnsubExecute(context) {
+    await context.deleteMessage()
+
     const userId = context.from.id
     const productId = Number(context.match[1])
     const users = this.api.db.collection('users')
