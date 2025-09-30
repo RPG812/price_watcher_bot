@@ -195,6 +195,7 @@ export class TgBot {
     )
 
     const products = await this.api.getProducts([productId])
+
     if (products.length === 0) {
       await context.reply('Товар не найден')
       return
@@ -471,14 +472,17 @@ export class TgBot {
    */
   async notifyPriceChange(user, product) {
     const chatId = user._id
-    let diffLine = '💰 Цена изменилась'
+    const collection = this.db.collection('products')
+    const dbProduct = await collection.findOne(
+      { _id: product.id },
+      { projection: { history: { $slice: -1 } } }
+    )
 
-    if (product.history && product.history.length > 0) {
-      const lastEntry = product.history[product.history.length - 1]
+    let diffLine
+    const lastEntry = dbProduct?.history?.[0]
 
-      if (lastEntry && lastEntry.priceCurrent !== product.priceCurrent) {
-        diffLine = `💰 Цена изменилась: ${lastEntry.priceCurrent} ₽ → ${product.priceCurrent} ₽`
-      }
+    if (lastEntry && lastEntry.priceCurrent !== product.priceCurrent) {
+      diffLine = `💰 Цена изменилась: ${lastEntry.priceCurrent} ₽ → ${product.priceCurrent} ₽`
     } else {
       diffLine = `💰 Новая цена: ${product.priceCurrent} ₽`
     }

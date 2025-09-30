@@ -162,13 +162,23 @@ export class WbApi {
 
 
   /**
-   * @param {object} product - raw product data from WB API
+   * @param {object} product
    * @returns {Promise<ProductCard>}
    */
   async getCard(product) {
     const id = Number(product.id)
     const imageURL = this.buildImageUrl(product)
-    const image = await this.getImageStr(imageURL)
+
+    const existing = await this.db.collection('products').findOne(
+      { _id: id },
+      { projection: { image: 1 } }
+    )
+
+    let image = existing?.image || null
+
+    if (!image) {
+      image = await this.getImageStr(imageURL)
+    }
 
     const size = product.sizes?.[0]?.price || {}
     const priceOriginal = size.basic ? size.basic / 100 : 0
@@ -190,6 +200,7 @@ export class WbApi {
       link: `https://www.wildberries.ru/catalog/${id}/detail.aspx`
     }
   }
+
 
 
   /**
