@@ -1,4 +1,4 @@
-import { Telegraf } from 'telegraf'
+import { Markup, Telegraf } from 'telegraf'
 import { tg_token } from '../../auth/auth.mjs'
 
 /**
@@ -13,9 +13,38 @@ export class TgBot {
     this.bot = new Telegraf(tg_token)
   }
 
+  /**
+   * Start bot (polling)
+   * @returns {Promise<void>}
+   */
+  async start() {
+    this.initHandlers()
+
+    await this.bot.launch()
+
+    console.log('[TgBot] started')
+  }
+
+  /**
+   * Stop bot gracefully
+   * @param {string} [reason]
+   * @returns {Promise<void>}
+   */
+  async stop(reason = 'manual') {
+    console.log(`[TgBot] stopping (${reason})...`)
+    await this.bot.stop(reason)
+  }
+
+  /**
+   * Register handlers
+   */
   initHandlers() {
     this.bot.start(context => this.handleStart(context))
     this.bot.on('text', context => this.handleText(context))
+    this.bot.command('subs', context => this.handleSubscriptions(context))
+    this.bot.action(/unsub:(\d+)/, context => this.handleUnsubConfirm(context))
+    this.bot.action(/confirmUnsub:(\d+)/, context => this.handleUnsubExecute(context))
+    this.bot.action(/sub:(\d+)/, context => this.handleSubscribe(context))
   }
 
   /**
@@ -23,8 +52,6 @@ export class TgBot {
    * @param {import('telegraf').Context} context
    */
   async handleStart(context) {
-    console.log(`[handleStart] context:`, context) // DEBUG
-
     const userId = context.from.id
     const username = context.from.username || ''
     const firstName = context.from.first_name || ''
@@ -34,7 +61,7 @@ export class TgBot {
     const existing = await users.findOne({ _id: userId })
 
     if (!existing) {
-      await context.reply(`Привет, ${firstName}! 👋`)
+      await context.reply(`Привет, ${firstName || 'друг'}! 👋`)
       await context.reply(
         'Я бот для отслеживания цен на товары Wildberries.\n' +
         'Что я умею:\n' +
@@ -55,15 +82,36 @@ export class TgBot {
 
       console.log(`[TgBot] new user ${userId} (${username}) created`)
     } else {
-      await context.reply(`С возвращением, ${firstName}! 👋`)
+      await context.reply(`С возвращением, ${firstName || 'друг'}! 👋`)
+      await users.updateOne(
+        { _id: userId },
+        { $set: { lastActiveAt: new Date() } }
+      )
     }
 
-    await context.reply('Пришли артикул WB, и я подпишу тебя на обновления')
+    await context.reply('Пришли артикул WB, и я покажу карточку 📦')
   }
 
-
+  /**
+   * Handle text messages
+   * @param {import('telegraf').Context} context
+   */
   async handleText(context) {
     const text = context.message.text.trim()
+
+    if (/^\d+$/.test(text)) {
+      await this.handleArticleInput(context, Number(text))
+    } else {
+      await context.reply('Пришли артикул (число)')
+    }
+  }
+
+  /**
+   * Process article input from user
+   * @param {import('telegraf').Context} context
+   * @param {number} productId
+   */
+  async handleArticleInput(context, productId) {
     const userId = context.from.id
     const users = this.api.db.collection('users')
 
@@ -72,37 +120,76 @@ export class TgBot {
       { $set: { lastActiveAt: new Date() } }
     )
 
-    if (/^\d+$/.test(text)) {
-      const productId = Number(text)
-      const products = await this.api.getProducts([productId])
+    const products = await this.api.getProducts([productId])
 
-      if (products.length > 0) {
-        const product = products[0]
-
-        const cardMessage = this.formatProductCard(product)
-        await context.replyWithPhoto(cardMessage.photo, {
-          caption: cardMessage.caption,
-          parse_mode: cardMessage.parse_mode
-        })
-
-        await this.api.saveProduct(product)
-
-        await users.updateOne(
-          { _id: userId },
-          { $addToSet: { subscriptions: productId } }
-        )
-        console.log(`[TgBot] user ${userId} subscribed to ${productId}`)
-
-        await context.reply('Теперь я буду следить за ценой этого товара 👀')
-      } else {
-        await context.reply('Товар не найден')
-      }
-    } else {
-      await context.reply('Пришли артикул (число)')
+    if (products.length === 0) {
+      await context.reply('Товар не найден')
+      return
     }
+
+    const product = products[0]
+    const cardMessage = this.formatProductCard(product)
+
+    const user = await users.findOne({ _id: userId })
+    const isSubscribed = user?.subscriptions?.includes(productId)
+
+    let keyboard
+
+    if (isSubscribed) {
+      keyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '❌ Отписаться', callback_data: `unsub:${product.id}` }]
+          ]
+        }
+      }
+
+      await context.replyWithPhoto(cardMessage.photo, {
+        caption: `${cardMessage.caption}\n\n✅ Ты уже подписан на этот товар`,
+        parse_mode: cardMessage.parse_mode,
+        ...keyboard
+      })
+    } else {
+      keyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Подписаться', callback_data: `sub:${product.id}` }]
+          ]
+        }
+      }
+
+      await context.replyWithPhoto(cardMessage.photo, {
+        caption: cardMessage.caption,
+        parse_mode: cardMessage.parse_mode,
+        ...keyboard
+      })
+    }
+
+    await this.api.saveProduct(product)
+  }
+
+
+  /**
+   * Subscribe user to product
+   * @param {import('telegraf').Context} context
+   */
+  async handleSubscribe(context) {
+    const userId = context.from.id
+    const productId = Number(context.match[1])
+    const users = this.api.db.collection('users')
+
+    await users.updateOne(
+      { _id: userId },
+      { $addToSet: { subscriptions: productId } }
+    )
+
+    await context.reply(`Теперь я слежу за ценой товара ${productId} 👀`)
+
+    console.log(`[TgBot] user ${userId} subscribed to ${productId}`)
   }
 
   /**
+   * Format product card message for Telegram
    * @param {import('./wbApi.mjs').ProductCard} product
    * @returns {{ photo: string, caption: string, parse_mode: string }}
    */
@@ -130,21 +217,60 @@ export class TgBot {
   }
 
   /**
-   * Start bot (polling)
+   * Handle /subs command
+   * @param {import('telegraf').Context} context
    */
-  async start() {
-    this.initHandlers()
+  async handleSubscriptions(context) {
+    const userId = context.from.id
+    const users = this.api.db.collection('users')
 
-    await this.bot.launch()
+    const user = await users.findOne({ _id: userId })
 
-    console.log('[TgBot] started')
+    if (!user || user.subscriptions.length === 0) {
+      await context.reply('У тебя пока нет подписок 📭')
+      return
+    }
+
+    const products = await this.api.getProducts(user.subscriptions)
+
+    let msg = '📋 Твои подписки:\n\n'
+    for (const product of products) {
+      msg += `— ${product.name} (${product.id}): ${product.priceCurrent} ₽\n`
+    }
+
+    await context.reply(msg)
   }
 
   /**
-   * Stop bot gracefully
+   * Ask confirmation for unsubscribe
+   * @param {import('telegraf').Context} context
    */
-  async stop(reason = 'manual') {
-    console.log(`[TgBot] stopping (${reason})...`)
-    await this.bot.stop(reason)
+  async handleUnsubConfirm(context) {
+    const productId = context.match[1]
+
+    await context.reply(
+      `Ты уверен, что хочешь отписаться от товара ${productId}?`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Да', `confirmUnsub:${productId}`)],
+        [Markup.button.callback('❌ Нет', 'cancelUnsub')]
+      ])
+    )
+  }
+
+  /**
+   * Execute unsubscribe
+   * @param {import('telegraf').Context} context
+   */
+  async handleUnsubExecute(context) {
+    const userId = context.from.id
+    const productId = Number(context.match[1])
+    const users = this.api.db.collection('users')
+
+    await users.updateOne(
+      { _id: userId },
+      { $pull: { subscriptions: productId } }
+    )
+
+    await context.reply(`Ты отписался от товара ${productId} ❌`)
   }
 }
