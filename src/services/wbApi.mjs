@@ -70,7 +70,6 @@ export class WbApi {
       {
         name: 'users',
         indexes: [
-          { key: { _id: 1 }, name: '_id_1', unique: true },
           { key: { 'subscriptions.productId': 1 }, name: 'subscriptions_productId_1' },
           { key: { 'subscriptions.optionId': 1 }, name: 'subscriptions_optionId_1' }
         ]
@@ -301,8 +300,7 @@ export class WbApi {
   }
 
   /**
-   * Periodic price checker
-   * @param {import('./tgBot.mjs').TgBot} bot
+   * @param {TgBot} bot
    */
   async startPriceWatcher(bot) {
     if (this.priceWatcherId) {
@@ -327,7 +325,7 @@ export class WbApi {
   }
 
   /**
-   * @param {import('./tgBot.mjs').TgBot} bot
+   * @param {TgBot} bot
    * @return {Promise<void>}
    */
   async checkPrices(bot) {
@@ -482,7 +480,7 @@ export class WbApi {
   }
 
   /**
-   * @param {import('./tgBot.mjs').TgBot} bot
+   * @param {TgBot} bot
    * @param {Diff[]} diffs
    * @param {User[]} users
    * @return {Promise<void>}

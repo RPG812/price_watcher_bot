@@ -1,12 +1,18 @@
 /**
  * @typedef {object} User
  * @property {number} _id userId
- * @property {string} username
- * @property {string} firstName
- * @property {string} lastName
- * @property {{productId: number, optionId: number}[]} subscriptions
+ * @property {string} [username]
+ * @property {string} [firstName]
+ * @property {string} [lastName]
+ * @property {UserSubscription[]} subscriptions
  * @property {Date} createdAt
  * @property {Date} lastActiveAt
+ */
+
+/**
+ * @typedef {object} UserSubscription
+ * @property {number} productId
+ * @property {number} optionId
  */
 
 /**
@@ -62,4 +68,27 @@
  * @property {Changes[]} changes
  * @property {PriceHistoryEntry[]} historyEntries
  * @property {ProductSize[]} sizes
+ */
+
+/**
+ * @typedef {Object} UserMessages
+ * @property {number[]} menus
+ * @property {number[]} subs
+ * @property {Map<number, number>} products - Map of productId → messageId
+ */
+
+/**
+ * @typedef {'menus' | 'subs'} MessageType
+ */
+
+/**
+ * @typedef {import('telegraf').Telegraf} Bot
+ */
+
+/**
+ * @typedef {import('telegraf').Context} Context
+ */
+
+/**
+ * @typedef {import('telegraf').User | { id: number, username?: string, first_name?: string, last_name?: string }} TelegramUserInput
  */

@@ -1,594 +1,370 @@
-import { Markup, Telegraf } from 'telegraf'
+import { Telegraf } from 'telegraf'
 import { tg_token } from '../../auth/auth.mjs'
-
-/**
- * @typedef {Object} UserMessages
- * @property {number[]} menus - list of menu message IDs
- * @property {number[]} subs - list of subscription menu message IDs
- * @property {Map<number, number>} products - map of articleId -> messageId
- */
+import * as ui from './ui.mjs'
+import { MessageStore } from './messages.mjs'
+import { UserService } from './user-service.mjs'
 
 export class TgBot {
   /**
    * @param {import('./wbApi.mjs').WbApi} api
    */
-  constructor(api) {
+  constructor (api) {
     this.api = api
     this.bot = new Telegraf(tg_token)
-
-    this.pageSize = 5
-
-    /** @type {Map<number, UserMessages>} */
-    this.userMessages = new Map()
+    this.msgStore = new MessageStore(this.bot)
+    this.userService = new UserService(this.api.db)
   }
 
   /**
-   * Start bot (polling)
    * @returns {Promise<void>}
    */
-  async start() {
+  async start () {
     this.initHandlers()
     await this.bot.launch()
+
     console.log('[TgBot] started')
   }
 
   /**
-   * Stop bot gracefully
    * @param {string} [reason]
    * @returns {Promise<void>}
    */
-  async stop(reason = 'manual') {
+  async stop (reason = 'manual') {
     console.log(`[TgBot] stopping (${reason})...`)
+
     await this.bot.stop(reason)
   }
 
   /**
-   * Register handlers
+   *
    */
   initHandlers() {
-    // Commands
-    this.bot.start(context => this.handleStart(context))
-    this.bot.command('menu', context => this.showMainMenu(context))
-    this.bot.command('subs', context => this.handleSubscriptions(context))
+    const { bot } = this
 
-    // Inline menu actions
-    this.bot.action('openSubs', context => this.handleSubscriptions(context))
-    this.bot.action('addProductHelp', async context => {
-      await context.reply('Пришли артикул WB, и я покажу карточку 📦')
-    })
-    this.bot.action('unsubAllConfirm', context => this.handleUnsubAllConfirm(context))
+    bot.start(ctx => this.handleStart(ctx))
 
-    // Actions: subscriptions navigation
-    this.bot.action(/subsPage:(\d+)/, context => this.handleSubscriptionsPage(context))
+    bot.command('menu', ctx => this.showMainMenu(ctx))
+    bot.action('menu', ctx => this.showMainMenu(ctx))
+    bot.action('cancel', ctx => this.handleCancel(ctx))
 
-    // Actions: single subscribe/unsubscribe
-    this.bot.action(/confirmUnsub:(\d+)/, context => this.handleUnsubExecute(context))
-    this.bot.action(/unsub:(\d+)/, context => this.handleUnsubConfirm(context))
-    this.bot.action(/sub:(\d+)/, context => this.handleSubscribe(context))
+    bot.action('subscriptions', ctx => this.handleSubscriptions(ctx))
+    bot.action('addProduct', ctx => this.handleAddProduct(ctx))
+    bot.action('unsubAll', ctx => this.handleUnsubAllConfirm(ctx))
 
-    // Actions: unsubscribe all
-    this.bot.action('menu', context => this.showMainMenu(context))
-    this.bot.action('unsubAllConfirm', context => this.handleUnsubAllConfirm(context))
-    this.bot.action('unsubAllExecute', context => this.handleUnsubAllExecute(context))
-    this.bot.action(['cancelUnsubAll', 'cancelUnsub'], async ctx => {
+    bot.action(/^subscribe:(\d+)$/, ctx => this.handleSubscribe(ctx))
+    bot.action(/^subsize:(\d+):(\d+)$/, ctx => this.handleSubscribeSize(ctx))
+
+    // Ask confirmation before unsubscribing
+    bot.action(/^unsub:(\d+):(\d+)$/, ctx => this.handleUnsubConfirm(ctx))
+    bot.action('unsubAll', ctx => this.handleUnsubAllConfirm(ctx))
+    // Execute unsubscribe after confirmation
+    bot.action(/^unsubConfirm:(\d+):(\d+)$/, ctx => this.handleUnsubscribe(ctx))
+    bot.action('unsubAllConfirm', ctx => this.handleUnsubAllExecute(ctx))
+
+    bot.action(/^product:(\d+)$/, ctx => this.handleProductOpen(ctx))
+
+    bot.on('text', ctx => this.handleText(ctx))
+
+    bot.catch(async (err, ctx) => {
+      console.error('[TgBot] Error:', err)
       try {
-        await ctx.deleteMessage()
-      } catch (err) {
-        console.error('[TgBot] Failed to delete cancel message:', err.message)
-      }
-    })
-
-    this.bot.on('text', context => this.handleText(context))
-
-    this.bot.catch(async (err, context) => {
-      console.error('[TgBot] Error for user', context.from?.id, err)
-      try {
-        await context.reply('⚠️ Ошибка, попробуй чуть позже')
+        await ctx.reply('⚠️ Что-то пошло не так, попробуй позже')
       } catch (e) {
-        console.error('[TgBot] Failed to reply on error:', e.message)
+        console.error(`[TgBot] Failed to reply on error: ${e.message}`)
       }
     })
   }
 
-  /**
-   * Show main menu
-   */
-  async showMainMenu(context) {
-    const userId = context.from.id
-    const chatId = context.chat.id
-
-    await this.deleteUserMessages(userId, chatId, 'menus')
-
-    const msg = await context.reply(
-      'Главное меню:',
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '📋 Мои подписки', callback_data: 'openSubs' }],
-            [{ text: '➕ Добавить товар', callback_data: 'addProductHelp' }],
-            [{ text: '❌ Отписаться от всех', callback_data: 'unsubAllConfirm' }]
-          ]
-        }
-      }
-    )
-
-    this.trackUserMessage(userId, 'menus', msg.message_id)
-  }
+  // -------- HANDLERS -------- //
 
   /**
-   * @param {import('telegraf').Context} context
+   * @param {Context} ctx
+   * @return {Promise<void>}
    */
-  async handleStart(context) {
-    const userId = context.from.id
-    const username = context.from.username || ''
-    const firstName = context.from.first_name || ''
-    const lastName = context.from.last_name || ''
+  async handleStart(ctx) {
+    const { user, isNew } = await this.userService.ensureUser(ctx.from)
 
-    const users = this.api.db.collection('users')
-    const existing = await users.findOne({ _id: userId })
-
-    if (!existing) {
-      await context.reply(`Привет, ${firstName || 'друг'}! 👋`)
-      await context.reply(
-        'Я бот для отслеживания цен на товары Wildberries.\n' +
-        'Что я умею:\n' +
-        '— Показывать карточку товара по артикулу\n' +
-        '— Подписывать тебя на изменения цены\n' +
-        '— Уведомлять, когда цена изменилась 📉📈'
-      )
-
-      await users.insertOne({
-        _id: userId,
-        username,
-        firstName,
-        lastName,
-        subscriptions: [],
-        createdAt: new Date(),
-        lastActiveAt: new Date()
-      })
-
-      console.log(`[TgBot] new user ${userId} (${username}) created`)
+    if (isNew) {
+      await ui.sendWelcome(ctx, user.firstName)
+      console.log(`[TgBot] new user ${user._id} created`)
     } else {
-      await context.reply(`С возвращением, ${firstName || 'друг'}! 👋`)
-      await users.updateOne(
-        { _id: userId },
-        { $set: { lastActiveAt: new Date() } }
-      )
+      await ui.sendWelcomeBack(ctx, user.firstName)
     }
 
-    await this.showMainMenu(context)
+    await this.showMainMenu(ctx)
   }
 
   /**
-   * @param {import('telegraf').Context} context
+   * @param {Context} ctx
+   * @returns {Promise<void>}
    */
-  async handleText(context) {
-    const text = context.message.text.trim()
-    const chatId = context.chat.id
-    const messageId = context.message.message_id
+  async showMainMenu(ctx) {
+    const { id: userId } = ctx.from
+    const { id: chatId } = ctx.chat
 
-    // try to delete user message
+    await this.msgStore.deleteUserMessages(userId, chatId, 'menus')
+
+    const hasSubscriptions = await this.userService.hasSubscriptions(userId)
+
+    const {message_id: msgId} = await ui.sendMainMenu(ctx, hasSubscriptions)
+
+    this.msgStore.track(userId, 'menus', msgId)
+  }
+
+  /**
+   * @param {Context} ctx
+   * @returns {Promise<void>}
+   */
+  async handleSubscriptions(ctx) {
+    await this.msgStore.deleteUserMessages(ctx.from.id, ctx.chat.id, 'menus')
+    await ui.sendSubscriptionsInfo(ctx, this.userService, this.api)
+  }
+
+  /**
+   * @param {Context} ctx
+   * @returns {Promise<void>}
+   */
+  async handleAddProduct(ctx) {
+    await ui.sendAddProductHint(ctx)
+  }
+  /**
+   * @param {Context} ctx
+   * @returns {Promise<void>}
+   */
+  async handleCancel(ctx) {
+    const chatId = ctx.chat.id
+    const messageId = ctx.message.message_id
+
     try {
-      await this.bot.telegram.deleteMessage(chatId, messageId)
-    } catch (err) {
-      console.error('[TgBot] Failed to delete user text message:', err.message)
-    }
-
-    if (/^\d+$/.test(text)) {
-      await this.handleArticleInput(context, Number(text))
-    } else {
-      await context.reply('К сожалению, я тебя не понял. Вот тебе меню')
-      await this.showMainMenu(context)
+      await this.msgStore.delete(chatId, messageId)
+    } catch (e) {
+      console.error('[TgBot] Failed to delete user message:', e.message)
     }
   }
 
   /**
-   * @param {import('telegraf').Context} context
-   * @param {number} productId
+   * @param {Context} ctx
    */
-  async handleArticleInput(context, productId) {
-    const userId = context.from.id
-    const chatId = context.chat.id
-    const users = this.api.db.collection('users')
+  async handleProductOpen(ctx) {
+    const userId = ctx.from.id
+    const chatId = ctx.chat.id
+    const productId = Number(ctx.match[1])
 
-    await users.updateOne(
-      { _id: userId },
-      { $set: { lastActiveAt: new Date() } }
-    )
+    const [product] = await this.api.getProducts([productId])
 
+    if (!product) {
+      await ui.sendProductNotFound(ctx)
+
+      return
+    }
+
+    await this.msgStore.deleteProduct(userId, chatId, productId)
+
+    const msg = await ui.sendProductCard(ctx, product)
+
+    this.msgStore.trackProduct(userId, productId, msg.message_id)
+  }
+
+  /**
+   * @param {Context} ctx
+   * @return {Promise<void>}
+   */
+  async handleText(ctx) {
+    const chatId = ctx.chat.id
+    const messageId = ctx.message.message_id
+    const userText = ctx.message.text.trim()
+
+    try {
+      await this.msgStore.delete(chatId, messageId)
+    } catch (e) {
+      console.error('[TgBot] Failed to delete user message:', e.message)
+    }
+
+    // Try to extract a WB article (sequence of 5–10 digits)
+    const match = userText.match(/\b\d{5,10}\b/)
+
+    if (!match) {
+      await ui.sendUnknownText(ctx)
+      await this.showMainMenu(ctx)
+
+      return
+    }
+
+    const articleId = Number(match[0])
+
+    await this.handleArticleInput(ctx, articleId)
+  }
+
+  /**
+   * Handles product article input from user
+   * @param {Context} ctx
+   * @param {number} productId
+   * @returns {Promise<void>}
+   */
+  async handleArticleInput(ctx, productId) {
+    const chatId = ctx.chat.id
+    const userId = ctx.from.id
+
+    // Load product info
     const products = await this.api.getProducts([productId])
 
     if (products.length === 0) {
-      await context.reply('Товар не найден')
+      await ui.sendProductNotFound(ctx)
       return
     }
 
     const product = products[0]
-    const cardMessage = this.formatProductCard(product)
 
-    const user = await users.findOne({ _id: userId })
-    const isSubscribed = user?.subscriptions?.includes(productId)
+    // Update user's activity and get subscriptions
+    await this.userService.updateActivity(userId)
+    const subs = await this.userService.getSubscriptions(userId)
 
-    await this.deleteProductMessage(userId, chatId, productId)
+    // Check if user is subscribed to this product
+    const sub = subs.find(s => s.productId === productId)
+    const isSubscribed = Boolean(sub)
 
-    const keyboard = isSubscribed
-      ? {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '❌ Отписаться', callback_data: `unsub:${product.id}` }]
-          ]
-        }
+    // Clean up previous card (if exists)
+    await this.msgStore.deleteProduct(userId, chatId, productId)
+
+    // Determine price and size label for card
+    let displaySize = null
+    let displayPrice = null
+
+    if (isSubscribed) {
+      const size = product.sizes.find(s => s.optionId === sub.optionId)
+
+      if (size) {
+        displaySize = size.name
+        displayPrice = size.currentPrice
+      } else {
+        await this.userService.removeSubscription(userId, productId, sub.optionId)
+        await ui.sendProductOutdated(ctx)
+        return
       }
-      : {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '✅ Подписаться', callback_data: `sub:${product.id}` }]
-          ]
-        }
-      }
+    } else {
+      const mid = Math.floor(product.sizes.length / 2)
+      const avg = product.sizes[mid]
 
-    const msg = await context.replyWithPhoto(cardMessage.photo, {
-      caption: isSubscribed
-        ? `${cardMessage.caption}\n\n✅ Ты уже подписан на этот товар`
-        : cardMessage.caption,
-      parse_mode: cardMessage.parse_mode,
-      ...keyboard
+      displayPrice = avg?.currentPrice || product.sizes[0]?.currentPrice || 0
+    }
+
+    // Send main product card
+    const {message_id: cardMsgId} = await ui.sendProductCard(ctx, {
+      product,
+      isSubscribed,
+      displaySize,
+      displayPrice
     })
 
-    this.trackProductMessage(userId, productId, msg.message_id)
+    this.msgStore.trackProduct(userId, productId, cardMsgId)
+
     await this.api.saveProduct(product)
   }
 
   /**
-   * @param {import('telegraf').Context} context
+   * Handles click on "Subscribe" button
+   * @param {Context} ctx
    */
-  async handleSubscribe(context) {
-    const userId = context.from.id
-    const productId = Number(context.match[1])
-    const users = this.api.db.collection('users')
+  async handleSubscribe(ctx) {
+    const userId = ctx.from.id
+    const productId = Number(ctx.match[1])
 
-    await users.updateOne(
-      { _id: userId },
-      { $addToSet: { subscriptions: productId } }
-    )
-
-    await context.reply(`Теперь я слежу за ценой товара ${productId} 👀`)
-    console.log(`[TgBot] user ${userId} subscribed to ${productId}`)
-  }
-
-  /**
-   * @param {import('./wbApi.mjs').ProductCard} product
-   * @returns {{ photo: string, caption: string, parse_mode: string }}
-   */
-  formatProductCard(product) {
-    const ratingLine = product.rating
-      ? `⭐️ ${product.rating} (${product.feedbacks} отзывов)`
-      : ''
-
-    const stockLine = product.stock > 0
-      ? `📦 В наличии: ${product.stock} шт.`
-      : '❌ Нет в наличии'
-
-    const caption =
-      `📦 ${product.name}\n\n` +
-      `💰 Цена: ${product.priceCurrent} ₽` + '\n\n' +
-      `🔢 Артикул: ${product.id}\n` +
-      (product.brand ? `🏷 Бренд: ${product.brand}\n` : '') +
-      (product.supplier ? `👤 Продавец: ${product.supplier}\n` : '') +
-      (ratingLine ? ratingLine + '\n' : '') +
-      (stockLine ? stockLine + '\n' : '') +
-      `\n 🔗 [Открыть на WB](${product.link})`
-
-    return {
-      photo: product.imageURL,
-      caption,
-      parse_mode: 'Markdown'
-    }
-  }
-
-  /**
-   * @param {import('telegraf').Context} context
-   */
-  async handleUnsubConfirm(context) {
-    const productId = context.match[1]
-    await context.reply(
-      `Ты уверен, что хочешь отписаться от товара ${productId}?`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Да', `confirmUnsub:${productId}`)],
-        [Markup.button.callback('❌ Нет', 'cancelUnsub')]
-      ])
-    )
-  }
-
-  /**
-   * Execute unsubscribe
-   */
-  async handleUnsubExecute(context) {
-    await context.deleteMessage()
-
-    const userId = context.from.id
-    const productId = Number(context.match[1])
-    const users = this.api.db.collection('users')
-
-    await users.updateOne(
-      { _id: userId },
-      { $pull: { subscriptions: productId } }
-    )
-
-    await context.reply(`Ты отписался от товара ${productId} ❌`)
-  }
-
-  /**
-   * @param {import('telegraf').Context} context
-   */
-  async handleSubscriptions(context) {
-    const userId = context.from.id
-    const chatId = context.chat.id
-    const users = this.api.db.collection('users')
-    const user = await users.findOne({ _id: userId })
-
-    if (!user || user.subscriptions.length === 0) {
-      await context.reply('У тебя пока нет подписок 📭')
+    const [product] = await this.api.getProducts([productId])
+    if (!product) {
+      await ui.sendProductNotFound(ctx)
       return
     }
 
-    await this.deleteUserMessages(userId, chatId, 'subs')
+    if (product.sizes.length === 1) {
+      const size = product.sizes[0]
 
-    const total = user.subscriptions.length
-    const articleList = user.subscriptions.join(', ')
-    const firstBatch = Math.min(total, this.pageSize)
-
-    const msg = await context.reply(
-      `📋 У тебя ${this.formatSubscriptionsCount(total)}.\n\n` +
-      `Артикулы: ${articleList}`,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: `📦 Показать товары (${firstBatch})`, callback_data: `subsPage:0` }],
-            [{ text: '📋 Вернуться в меню', callback_data: 'menu' }],
-            [{ text: '❌ Отписаться от всех', callback_data: 'unsubAllConfirm' }]
-          ]
-        }
-      }
-    )
-
-    this.trackUserMessage(userId, 'subs', msg.message_id)
-  }
-
-  /**
-   * @param {import('telegraf').Context} context
-   */
-  async handleSubscriptionsPage(context) {
-    const userId = context.from.id
-    const chatId = context.chat.id
-    const users = this.api.db.collection('users')
-    const user = await users.findOne({ _id: userId })
-
-    if (!user || user.subscriptions.length === 0) {
-      await context.reply('Подписок больше нет 📭')
-      return
-    }
-
-    const offset = Number(context.match[1]) || 0
-    const productIds = user.subscriptions.slice(offset, offset + this.pageSize)
-    const products = await this.api.getProducts(productIds)
-
-    for (const product of products) {
-      const cardMessage = this.formatProductCard(product)
-
-      await this.deleteProductMessage(userId, chatId, product.id)
-
-      const msg = await context.replyWithPhoto(cardMessage.photo, {
-        caption: `${cardMessage.caption}\n\n✅ Ты подписан на этот товар`,
-        parse_mode: cardMessage.parse_mode,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '❌ Отписаться', callback_data: `unsub:${product.id}` }]
-          ]
-        }
-      })
-
-      this.trackProductMessage(userId, product.id, msg.message_id)
-    }
-
-    const nextOffset = offset + this.pageSize
-
-    if (nextOffset < user.subscriptions.length) {
-      const msg = await context.reply(
-        `Показано ${nextOffset} из ${user.subscriptions.length}.`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '➡️ Загрузить ещё', callback_data: `subsPage:${nextOffset}` }]
-            ]
-          }
-        }
-      )
-
-      this.trackUserMessage(userId, 'subs', msg.message_id)
+      await this.userService.addSubscription(userId, productId, size.optionId)
+      await ui.sendSubscribed(ctx, product, size)
     } else {
-      const msg = await context.reply(
-        'Все подписки показаны ✅',
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '❌ Отписаться от всех', callback_data: 'unsubAllConfirm' }]
-            ]
-          }
-        }
-      )
-
-      this.trackUserMessage(userId, 'subs', msg.message_id)
+      await ui.sendSizeSelector(ctx, product)
     }
   }
 
   /**
-   * Russian pluralization for word "подписка"
+   * Handles user selecting size for subscription
+   * @param {Context} ctx
    */
-  formatSubscriptionsCount(count) {
-    const lastDigit = count % 10
-    const lastTwo = count % 100
+  async handleSubscribeSize(ctx) {
+    const userId = ctx.from.id
+    const [, productIdRaw, optionIdRaw] = ctx.match
+    const productId = Number(productIdRaw)
+    const optionId = Number(optionIdRaw)
 
-    if (lastTwo >= 11 && lastTwo <= 19) return `${count} подписок`
-    if (lastDigit === 1) return `${count} подписка`
-    if (lastDigit >= 2 && lastDigit <= 4) return `${count} подписки`
+    const [product] = await this.api.getProducts([productId])
 
-    return `${count} подписок`
+    if (!product) {
+      await ui.sendProductNotFound(ctx)
+      return
+    }
+
+    const size = product.sizes.find(s => s.optionId === optionId)
+
+    if (!size) {
+      await ui.sendProductOutdated(ctx)
+      return
+    }
+
+    await this.userService.addSubscription(userId, productId, optionId)
+    await ui.sendSubscribed(ctx, product)
+
+    await this.handleArticleInput(ctx, productId)
   }
 
   /**
-   * @param {import('telegraf').Context} context
+   * Asks user to confirm single unsubscribe
+   * @param {Context} ctx
    */
-  async handleUnsubAllConfirm(context) {
-    await context.reply(
-      '⚠️ Ты уверен? Это удалит все твои подписки, и я перестану присылать обновления.\n\n' +
-      'Выбери действие:',
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '✅ Да, я всё понимаю, удалить все', callback_data: 'unsubAllExecute' }],
-            [{ text: '❌ Я передумал, оставить подписки', callback_data: 'cancelUnsubAll' }]
-          ]
-        }
-      }
-    )
+  async handleUnsubConfirm(ctx) {
+    const [, productIdRaw, optionIdRaw] = ctx.match
+    const productId = Number(productIdRaw)
+    const optionId = Number(optionIdRaw)
+
+    await ui.sendUnsubConfirm(ctx, productId, optionId)
   }
 
   /**
-   * @param {import('telegraf').Context} context
+   * Executes single unsubscribe
+   * @param {Context} ctx
    */
-  async handleUnsubAllExecute(context) {
-    const userId = context.from.id
-    const users = this.api.db.collection('users')
+  async handleUnsubscribe(ctx) {
+    const userId = ctx.from.id
+    const [, productIdRaw, optionIdRaw] = ctx.match
+    const productId = Number(productIdRaw)
+    const optionId = Number(optionIdRaw)
 
-    await users.updateOne(
-      { _id: userId },
-      { $set: { subscriptions: [] } }
-    )
+    await this.userService.removeSubscription(userId, productId, optionId)
+    await ui.sendUnsubscribed(ctx)
 
-    await context.reply('Все твои подписки удалены ❌')
+    await this.handleArticleInput(ctx, productId)
   }
 
   /**
-   * @param {object} user
-   * @param {ProductCard} product
+   * @param {Context} ctx
    * @returns {Promise<void>}
    */
-  async notifyPriceChange(user, product) {
-    const chatId = user._id
-    const collection = this.db.collection('products')
-    const dbProduct = await collection.findOne(
-      { _id: product.id },
-      { projection: { history: { $slice: -1 } } }
-    )
+  async handleUnsubAllConfirm(ctx) {
+    await ui.sendUnsubAllConfirm(ctx)
 
-    let diffLine
-    const lastEntry = dbProduct?.history?.[0]
-
-    if (lastEntry && lastEntry.priceCurrent !== product.priceCurrent) {
-      diffLine = `💰 Цена изменилась: ${lastEntry.priceCurrent} ₽ → ${product.priceCurrent} ₽`
-    } else {
-      diffLine = `💰 Новая цена: ${product.priceCurrent} ₽`
-    }
-
-    const cardMessage = this.formatProductCard(product)
-
-    try {
-      await this.deleteProductMessage(chatId, chatId, product.id)
-
-      const msg = await this.bot.telegram.sendPhoto(chatId, cardMessage.photo, {
-        caption: `${diffLine}\n\n${cardMessage.caption}`,
-        parse_mode: cardMessage.parse_mode,
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '❌ Отписаться', callback_data: `unsub:${product.id}` }]
-          ]
-        }
-      })
-
-      this.trackProductMessage(chatId, product.id, msg.message_id)
-
-      console.log(`[TgBot] notified user ${chatId} about price change for ${product.id}`)
-    } catch (e) {
-      console.error(`[TgBot] failed to notify user ${chatId}:`, e.message)
-    }
+    await this.showMainMenu(ctx)
   }
 
   /**
-   * Ensure user storage initialized
-   * @param {number} userId
-   * @returns {UserMessages}
+   * Executes removal of all user subscriptions
+   * @param {Context} ctx
    */
-  ensureUserMessages(userId) {
-    if (!this.userMessages.has(userId)) {
-      this.userMessages.set(userId, {
-        menus: [],
-        subs: [],
-        products: new Map()
-      })
-    }
-    return this.userMessages.get(userId)
+  async handleUnsubAllExecute(ctx) {
+    const userId = ctx.from.id
+
+    await this.userService.clearSubscriptions(userId)
+    await ui.sendUnsubAllDone(ctx)
+
+    // Optional: show menu after cleanup
+    await this.showMainMenu(ctx)
   }
 
-  /**
-   * Track menu/subscription message
-   * @param {number} userId
-   * @param {'menus'|'subs'} type
-   * @param {number} messageId
-   */
-  trackUserMessage(userId, type, messageId) {
-    const data = this.ensureUserMessages(userId)
-    data[type].push(messageId)
-  }
-
-  /**
-   * Delete all messages of a given type
-   * @param {number} userId
-   * @param {number} chatId
-   * @param {'menus'|'subs'} type
-   */
-  async deleteUserMessages(userId, chatId, type) {
-    const data = this.ensureUserMessages(userId)
-
-    for (const msgId of data[type]) {
-      try {
-        await this.bot.telegram.deleteMessage(chatId, msgId)
-      } catch (err) {
-        console.error(`[TgBot] Failed to delete ${type} message ${msgId}:`, err.message)
-      }
-    }
-
-    data[type] = []
-  }
-
-  /**
-   * Track product message by articleId
-   * @param {number} userId
-   * @param {number} articleId
-   * @param {number} messageId
-   */
-  trackProductMessage(userId, articleId, messageId) {
-    const data = this.ensureUserMessages(userId)
-    data.products.set(articleId, messageId)
-  }
-
-  /**
-   * Delete old product message if exists
-   * @param {number} userId
-   * @param {number} chatId
-   * @param {number} articleId
-   */
-  async deleteProductMessage(userId, chatId, articleId) {
-    const data = this.ensureUserMessages(userId)
-    const msgId = data.products.get(articleId)
-
-    if (msgId) {
-      try {
-        await this.bot.telegram.deleteMessage(chatId, msgId)
-      } catch (err) {
-        console.error(`[TgBot] Failed to delete product ${articleId} message:`, err.message)
-      }
-      data.products.delete(articleId)
-    }
-  }
 }
