@@ -2,11 +2,12 @@ import { Buffer } from 'node:buffer'
 import { MongoClient } from 'mongodb'
 import basketMap from './basketMap.mjs'
 
+const CATALOG_URL = 'https://www.wildberries.ru/catalog'
+const CARD_URL = 'https://u-card.wb.ru/cards/v4/list'
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0',
   'Accept': 'application/json'
 }
-
 const DEFAULT_PARAMS = {
   appType: '1',
   curr: 'rub',
@@ -16,32 +17,6 @@ const DEFAULT_PARAMS = {
   lang: 'ru',
   ignore_stocks: 'true'
 }
-
-/**
- * @typedef {object} PriceEntry
- * @property {Date} date
- * @property {number} priceCurrent
- * @property {number} priceOriginal
- * @property {string} dest
- */
-
-/**
- * @typedef {object} ProductCard
- * @property {number} id
- * @property {string} name
- * @property {string} brand
- * @property {string} supplier
- * @property {string} category
- * @property {number} priceCurrent
- * @property {number} priceOriginal
- * @property {number} rating
- * @property {number} feedbacks
- * @property {number} stock
- * @property {string} imageURL
- * @property {string|null} image
- * @property {string} link
- * @property {PriceEntry[]} [history]
- */
 
 /**
  * Wildberries API + Mongo wrapper
@@ -56,7 +31,8 @@ export class WbApi {
     this.priceWatcherId = null
     this.watchInterval = 60 * 1000
     this.threshold = 60 * 1000
-    // this.threshold = 30 * 60 * 1000
+
+    this.notifiLimit = 5
   }
 
   /**
@@ -87,8 +63,23 @@ export class WbApi {
       {
         name: 'products',
         indexes: [
-          { key: { brand: 1 }, name: 'brand_1' },
-          { key: { supplier: 1 }, name: 'supplier_1' }
+          { key: { id: 1 }, name: 'id_1', unique: true },
+          { key: { id: 1, lastCheckedAt: 1 }, name: 'id_lastCheckedAt_1' }
+        ]
+      },
+      {
+        name: 'users',
+        indexes: [
+          { key: { _id: 1 }, name: '_id_1', unique: true },
+          { key: { 'subscriptions.productId': 1 }, name: 'subscriptions_productId_1' },
+          { key: { 'subscriptions.optionId': 1 }, name: 'subscriptions_optionId_1' }
+        ]
+      },
+      {
+        name: 'price_history',
+        indexes: [
+          { key: { productId: 1, optionId: 1, date: -1 }, name: 'productId_optionId_date_desc' },
+          { key: { date: -1 }, name: 'date_desc' }
         ]
       }
     ]
@@ -116,6 +107,8 @@ export class WbApi {
             unique: Boolean(idx.unique),
             background: true
           })
+        } else {
+          console.debug(`[mongo] index already exists: ${col.name}.${idx.name}`)
         }
       }
     }
@@ -147,6 +140,7 @@ export class WbApi {
       for (const product of data.products) {
         try {
           const card = await this.getCard(product)
+
           result.push(card)
         } catch (e) {
           console.error(`[getProducts] error building card id=${product.id}:`, e.message)
@@ -166,11 +160,13 @@ export class WbApi {
    * @returns {Promise<ProductCard>}
    */
   async getCard(product) {
+    console.log('[getCard] product', product)
+
     const id = Number(product.id)
     const imageURL = this.buildImageUrl(product)
 
     const existing = await this.db.collection('products').findOne(
-      { _id: id },
+      { id },
       { projection: { image: 1 } }
     )
 
@@ -180,9 +176,19 @@ export class WbApi {
       image = await this.getImageStr(imageURL)
     }
 
-    const size = product.sizes?.[0]?.price || {}
-    const priceOriginal = size.basic ? size.basic / 100 : 0
-    const priceCurrent = size.product ? size.product / 100 : 0
+    const sizes = (product.sizes || []).map(size => {
+      const originalPrice = size.price?.basic ? size.price.basic / 100 : 0
+      const currentPrice = size.price?.product ? size.price.product / 100 : 0
+
+      return {
+        name: size.name || '',
+        origName: size.origName || '',
+        optionId: size.optionId || null,
+        originalPrice,
+        currentPrice,
+        stock: size.stock || 0
+      }
+    })
 
     return {
       id,
@@ -190,18 +196,15 @@ export class WbApi {
       brand: product.brand || '',
       supplier: product.supplier || '',
       category: product.entity || '',
-      priceCurrent,
-      priceOriginal,
-      rating: Number(product.nmReviewRating || product.rating) || 0,
+      rating: Number(product.nmReviewRating || product.reviewRating || product.rating) || 0,
       feedbacks: Number(product.nmFeedbacks || product.feedbacks) || 0,
       stock: Number(product.totalQuantity) || 0,
+      sizes,
       imageURL,
       image,
-      link: `https://www.wildberries.ru/catalog/${id}/detail.aspx`
+      link: `${CATALOG_URL}/${id}/detail.aspx`
     }
   }
-
-
 
   /**
    * @param {Array<string|number>} ids
@@ -211,7 +214,7 @@ export class WbApi {
     const nm = Array.isArray(ids) ? ids.join(';') : String(ids)
     const params = new URLSearchParams({ ...DEFAULT_PARAMS, nm })
 
-    return `https://u-card.wb.ru/cards/v4/list?${params.toString()}`
+    return `${CARD_URL}?${params.toString()}`
   }
 
   /**
@@ -275,7 +278,6 @@ export class WbApi {
   }
 
   /**
-   * Save or update product in DB
    * @param {ProductCard} card
    * @returns {Promise<void>}
    */
@@ -284,80 +286,18 @@ export class WbApi {
 
     const update = {
       $set: {
-        name: card.name,
-        brand: card.brand,
-        supplier: card.supplier,
-        link: card.link,
-        imageURL: card.imageURL,
-        image: card.image,
-        category: card.category,
-        stock: card.stock,
-        rating: card.rating,
-        feedbacks: card.feedbacks,
+        ...card,
         lastCheckedAt: new Date()
-      },
-      $setOnInsert: {
-        history: [{
-          date: new Date(),
-          priceCurrent: card.priceCurrent,
-          priceOriginal: card.priceOriginal,
-          dest: DEFAULT_PARAMS.dest
-        }]
       }
     }
 
     await collection.updateOne(
-      { _id: card.id },
+      { id: card.id },
       update,
       { upsert: true }
     )
 
     console.log(`[mongo] product ${card.id} saved`)
-  }
-
-
-  /**
-   * @param {ProductCard} card
-   * @returns {Promise<boolean>}
-   */
-  async checkPriceChange(card) {
-    const collection = this.db.collection('products')
-    const product = await collection.findOne({ _id: card.id }, { projection: { history: { $slice: -1 } } })
-
-    if (!product || !product.history || product.history.length === 0) {
-      return true
-    }
-
-    const last = product.history[0]
-
-    return last.priceCurrent !== card.priceCurrent
-  }
-
-  /**
-   * @param {ProductCard} card
-   * @returns {Promise<void>}
-   */
-  async updatePrice(card) {
-    const hasChanged = await this.checkPriceChange(card)
-
-    if (!hasChanged) {
-      return
-    }
-
-    const collection = this.db.collection('products')
-    const entry = {
-      date: new Date(),
-      priceCurrent: card.priceCurrent,
-      priceOriginal: card.priceOriginal,
-      dest: DEFAULT_PARAMS.dest // TODO
-    }
-
-    await collection.updateOne(
-      { _id: card.id },
-      { $push: { history: entry } }
-    )
-
-    console.log(`[mongo] price updated for ${card.name}: ${entry.priceCurrent}`)
   }
 
   /**
@@ -387,61 +327,305 @@ export class WbApi {
   }
 
   /**
-   * Check all products that need update
    * @param {import('./tgBot.mjs').TgBot} bot
+   * @return {Promise<void>}
    */
   async checkPrices(bot) {
     try {
-      const usersCol = this.db.collection('users')
-      const productsCol = this.db.collection('products')
+      const users = await this.db.collection('users').find({ subscriptions: { $ne: [] } }).toArray()
+      const diffs = await this.getProductsDiffs(users)
 
-      const users = await usersCol.find({ subscriptions: { $exists: true, $ne: [] } }).toArray()
-      const subscribedIds = [...new Set(users.flatMap(u => u.subscriptions))]
-
-      if (subscribedIds.length === 0) {
-        console.log('[WbApi] no subscribed products, skipping check')
+      if (diffs.length === 0) {
+        console.log('[WbApi] no price changes found')
         return
       }
 
-      const threshold = new Date(Date.now() - this.threshold)
+      await this.applyProductDiffs(diffs)
+      await this.notifySubscribers(bot, diffs, users)
 
-      const productsToCheck = await productsCol
-        .find({
-          _id: { $in: subscribedIds },
-          lastCheckedAt: { $lt: threshold }
-        })
-        .limit(100)
-        .toArray()
-
-      if (productsToCheck.length === 0) {
-        return
-      }
-
-      console.log(`[WbApi] checking ${productsToCheck.length} products`)
-
-      const ids = productsToCheck.map(p => p._id)
-      const products = await this.getProducts(ids)
-
-      for (const card of products) {
-        const hasChanged = await this.checkPriceChange(card)
-
-        await this.updatePrice(card)
-
-        await productsCol.updateOne(
-          { _id: card.id },
-          { $set: { lastCheckedAt: new Date() } }
-        )
-
-        if (hasChanged) {
-          const affectedUsers = users.filter(u => u.subscriptions.includes(card.id))
-
-          for (const user of affectedUsers) {
-            await bot.notifyPriceChange(user, card)
-          }
-        }
-      }
+      console.log('[WbApi] price check completed successfully')
     } catch (e) {
-      console.error('[WbApi] checkPrices error:', e.message)
+      console.error('[WbApi] checkPrices error:', e)
     }
   }
+
+  /**
+   * @param {User[]} users
+   * @returns {Promise<Diff[]>}
+   */
+  async getProductsDiffs(users) {
+    const subscribedIds = [
+      ...new Set(users.flatMap(u => u.subscriptions.map(s => s.productId)))
+    ]
+
+    if (subscribedIds.length === 0) {
+      console.log('[WbApi] no subscribed products, skipping check')
+      return []
+    }
+
+    const threshold = new Date(Date.now() - this.threshold)
+    const productsToCheck = await this.db.collection('products')
+      .find({
+        id: { $in: subscribedIds },
+        lastCheckedAt: { $lt: threshold }
+      })
+      .limit(100)
+      .toArray()
+
+    if (productsToCheck.length === 0) {
+      return []
+    }
+
+    const freshCards = await this.getProducts(productsToCheck.map(p => p.id))
+
+    const dbById = new Map(productsToCheck.map(p => [p.id, p]))
+    const diffs = []
+
+    for (const card of freshCards) {
+      const dbProduct = dbById.get(card.id)
+      const { changes, historyEntries, sizes } = this.getDiffPrice(card, dbProduct)
+
+      if (changes.length > 0) {
+        diffs.push({ card, changes, historyEntries, sizes })
+      }
+    }
+
+    return diffs
+  }
+
+  /**
+   * @param {ProductCard} card
+   * @param {object} dbProduct
+   * @returns {{changes: Changes[], historyEntries: PriceHistoryEntry[], sizes: ProductSize[]}}
+   */
+  async getDiffPrice(card, dbProduct) {
+    const now = new Date()
+    const dbSizes = Array.isArray(dbProduct?.sizes) ? dbProduct.sizes : []
+    const dbByOption = new Map(dbSizes.map(s => [s.optionId, s]))
+
+    const changes = []
+    const historyEntries = []
+    const sizes = []
+
+    for (const size of card.sizes) {
+      const prev = dbByOption.get(size.optionId)
+      const prevPrice = prev?.currentPrice ?? size.currentPrice
+
+      if (size.currentPrice !== prevPrice) {
+        changes.push({
+          optionId: size.optionId,
+          name: size.name,
+          prevPrice,
+          currentPrice: size.currentPrice
+        })
+
+        historyEntries.push({
+          productId: card.id,
+          optionId: size.optionId,
+          date: now,
+          prevPrice,
+          currentPrice: size.currentPrice
+        })
+
+        sizes.push({
+          ...size,
+          prevCurrentPrice: prevPrice,
+          updateTime: now
+        })
+      } else {
+        sizes.push({
+          ...size,
+          prevCurrentPrice: prev?.prevCurrentPrice ?? prevPrice,
+          updateTime: prev?.updateTime ?? now
+        })
+      }
+    }
+
+    return {changes, historyEntries, sizes}
+  }
+
+  /**
+   * @param {Diff[]} diffs
+   * @return {Promise<void>}
+   */
+  async applyProductDiffs(diffs) {
+    const productsCol = this.db.collection('products')
+    const historyCol = this.db.collection('price_history')
+
+    const now = new Date()
+    const productUpdates = []
+    const allHistoryEntries = []
+
+    for (const { card, historyEntries, sizes } of diffs) {
+      productUpdates.push({
+        updateOne: {
+          filter: { id: card.id },
+          update: { $set: { sizes, lastCheckedAt: now } },
+          upsert: true
+        }
+      })
+
+      if (historyEntries.length > 0) {
+        allHistoryEntries.push(...historyEntries)
+      }
+    }
+
+    if (productUpdates.length > 0) {
+      await productsCol.bulkWrite(productUpdates, { ordered: false })
+    }
+
+    if (allHistoryEntries.length > 0) {
+      await historyCol.insertMany(allHistoryEntries)
+    }
+
+    console.log(`[WbApi] updated ${productUpdates.length} products, inserted ${allHistoryEntries.length} history entries`)
+  }
+
+  /**
+   * @param {import('./tgBot.mjs').TgBot} bot
+   * @param {Diff[]} diffs
+   * @param {User[]} users
+   * @return {Promise<void>}
+   */
+  async notifySubscribers(bot, diffs, users) {
+    const notifications = []
+
+    for (const { card, changes } of diffs) {
+      const changedOptionIds = changes.map(c => c.optionId)
+      const affectedUsers = users.filter(u =>
+        u.subscriptions.some(
+          s => s.productId === card.id && changedOptionIds.includes(s.optionId)
+        )
+      )
+
+      for (const user of affectedUsers) {
+        const relevantChanges = changes.filter(c =>
+          user.subscriptions.some(
+            s => s.productId === card.id && s.optionId === c.optionId
+          )
+        )
+        notifications.push({ user, card, relevantChanges })
+      }
+    }
+
+    for (let i = 0; i < notifications.length; i += this.notifiLimit) {
+      const batch = notifications.slice(i, i + this.notifiLimit)
+
+      await Promise.all(batch.map(({ user, card, relevantChanges }) =>
+        bot.notifyPriceChange(user, card, relevantChanges)
+      ))
+    }
+
+    console.log(`[WbApi] notified ${notifications.length} users`)
+  }
 }
+
+// /**
+//  * Check all products that need update
+//  * @param {import('./tgBot.mjs').TgBot} bot
+//  */
+// async checkPrices(bot) {
+//   try {
+//     const usersCol = this.db.collection('users')
+//     const productsCol = this.db.collection('products')
+//     const historyCol = this.db.collection('price_history')
+//
+//     const users = await usersCol
+//       .find({ subscriptions: { $exists: true, $ne: [] } })
+//       .toArray()
+//
+//     const subscribedIds = [
+//       ...new Set(users.flatMap(u => u.subscriptions.map(s => s.productId)))
+//     ]
+//
+//     if (subscribedIds.length === 0) {
+//       console.log('[WbApi] no subscribed products, skipping check')
+//       return
+//     }
+//
+//     const threshold = new Date(Date.now() - this.threshold)
+//     const productsToCheck = await productsCol
+//       .find({
+//         id: { $in: subscribedIds },
+//         lastCheckedAt: { $lt: threshold }
+//       })
+//       .limit(100)
+//       .toArray()
+//
+//     if (productsToCheck.length === 0) {
+//       return
+//     }
+//
+//     console.log(`[WbApi] checking ${productsToCheck.length} products`)
+//
+//     const ids = productsToCheck.map(p => p.id)
+//     const freshCards = await this.getProducts(ids)
+//     const dbById = new Map(productsToCheck.map(p => [p.id, p]))
+//
+//     const productUpdates = []
+//     const allHistoryEntries = []
+//     const notifications = []
+//
+//     for (const card of freshCards) {
+//       const dbProduct = dbById.get(card.id)
+//       const { changes, historyEntries, sizes } = this.getDiffPrice(card, dbProduct)
+//
+//       const update = {
+//         $set: { lastCheckedAt: new Date() }
+//       }
+//
+//       if (changes.length > 0) {
+//         update.$set.sizes = sizes
+//       }
+//
+//       productUpdates.push({
+//         updateOne: {
+//           filter: { id: card.id },
+//           update,
+//           upsert: true
+//         }
+//       })
+//
+//       if (historyEntries.length > 0) {
+//         allHistoryEntries.push(...historyEntries)
+//       }
+//
+//       if (changes.length > 0) {
+//         const changedOptionIds = changes.map(c => c.optionId)
+//         const affectedUsers = users.filter(user =>
+//           user.subscriptions.some(
+//             s =>
+//               s.productId === card.id &&
+//               changedOptionIds.includes(s.optionId)
+//           )
+//         )
+//
+//         for (const user of affectedUsers) {
+//           const relevantChanges = changes.filter(c =>
+//             user.subscriptions.some(
+//               s => s.productId === card.id && s.optionId === c.optionId
+//             )
+//           )
+//
+//           notifications.push({ user, card, relevantChanges })
+//         }
+//       }
+//     }
+//
+//     if (productUpdates.length > 0) {
+//       await productsCol.bulkWrite(productUpdates, { ordered: false })
+//     }
+//
+//     if (allHistoryEntries.length > 0) {
+//       await historyCol.insertMany(allHistoryEntries)
+//     }
+//
+//     for (const { user, card, relevantChanges } of notifications) {
+//       await bot.notifyPriceChange(user, card, relevantChanges)
+//     }
+//
+//     console.log(`[WbApi] done: updated ${productUpdates.length} products, inserted ${allHistoryEntries.length} history entries`)
+//   } catch (e) {
+//     console.error('[WbApi] checkPrices error:', e.message)
+//   }
+// }
