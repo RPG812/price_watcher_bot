@@ -1,11 +1,24 @@
 import { WbApi } from './services/wbApi.mjs'
 import { TgBot } from './bot/tgBot.mjs'
+import process from 'node:process'
 
 const api = new WbApi('mongodb://localhost:27017', 'wb')
-
 await api.initDb()
 await api.setupMongo()
 
+const bot = new TgBot(api)
+await bot.start()
+
+await api.startPriceWatcher(bot)
+
+process.on('SIGINT', async () => {
+  console.log('Shutting down gracefully...')
+  await bot.msgStore.destroy()
+  await bot.stop('SIGINT')
+  process.exit(0)
+})
+
+console.log('DONE')
 
 // const products = await api.getProducts([173990240])
 // console.log(products)
@@ -15,10 +28,3 @@ await api.setupMongo()
 //   await api.saveProduct(card)
 //   await api.getDiffPrice(card)
 // }
-
-const bot = new TgBot(api)
-bot.start().catch((e) => console.error(e))
-
-await api.startPriceWatcher(bot)
-//
-console.log('DONE')

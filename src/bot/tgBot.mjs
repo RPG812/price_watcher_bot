@@ -25,7 +25,10 @@ export class TgBot {
   async start () {
     this.initUserMiddleware()
     this.initHandlers()
-    await this.bot.launch()
+
+    this.bot.launch().then(() => {
+      console.log('[TgBot] polling started')
+    }).catch(console.error)
 
     setInterval(() => this.userService.cleanupCache(), 60 * 1000)
 
@@ -130,7 +133,6 @@ export class TgBot {
 
     bot.catch(async (err, ctx) => {
       console.error('[TgBot] Error:', err)
-      await this.ui.sendError(ctx)
 
       try {
         await this.ui.sendError(ctx)
@@ -160,26 +162,6 @@ export class TgBot {
 
     await this.showMainMenu(ctx)
   }
-
-
-  // /**
-  //  * @param {Context} ctx
-  //  * @return {Promise<void>}
-  //  */
-  // async handleStart(ctx) {
-  //   const { user, isNew } = await this.userService.ensureUser(ctx.from)
-  //
-  //   await this.msgStore.deleteUserMessage(ctx)
-  //
-  //   if (isNew) {
-  //     await this.ui.sendWelcome(ctx, user.firstName)
-  //     console.log(`[TgBot] new user ${user._id} created`)
-  //   } else {
-  //     await this.ui.sendWelcomeBack(ctx, user.firstName)
-  //   }
-  //
-  //   await this.showMainMenu(ctx)
-  // }
 
   /**
    * @param {Context} ctx

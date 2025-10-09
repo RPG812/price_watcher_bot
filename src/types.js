@@ -75,6 +75,7 @@
  * @property {number|null} menu
  * @property {number[]} temp
  * @property {Map<number, number>} products - Map of productId → messageId
+ * @property {number} lastActive
  */
 
 /**

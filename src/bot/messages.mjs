@@ -1,5 +1,12 @@
+import fs from 'fs/promises'
+import path from 'path'
+
+const STORE_PATH = path.resolve('./data/message-cache.json')
+const TTL_DAYS = 7 // remove users inactive longer than 7 days
+
 /**
  * Handles tracking and deletion of Telegram messages to keep chats clean.
+ * Persists cache between restarts and auto-cleans inactive users.
  */
 export class MessageStore {
   /**
@@ -10,6 +17,13 @@ export class MessageStore {
 
     /** @type {Map<number, UserMessages>} */
     this.users = new Map()
+
+    this._dirty = false
+
+    this.load().catch(err => console.error('[MessageStore] Failed to load cache:', err.message))
+
+    setInterval(() => this.save().catch(() => {}), 60_000)
+    setInterval(() => this.cleanupInactive(TTL_DAYS), 60 * 60 * 1000)
   }
 
   /**
@@ -19,15 +33,19 @@ export class MessageStore {
    * @private
    */
   ensureUser(userId) {
+    const now = Date.now()
+
     if (!this.users.has(userId)) {
       this.users.set(userId, {
         products: new Map(),
         menu: null,
-        temp: []
+        temp: [],
+        lastActive: now
       })
+      this._dirty = true
+    } else {
+      this.users.get(userId).lastActive = now
     }
-
-    console.log(this.users.get(userId))
 
     return this.users.get(userId)
   }
@@ -55,12 +73,14 @@ export class MessageStore {
     try {
       await ctx.deleteMessage()
     } catch (e) {
-      console.error(`[TgBot] Failed to delete cancel message: ${e.message}`)
+      if (!e.message.includes('message to delete not found')) {
+        console.error(`[TgBot] Failed to delete cancel message: ${e.message}`)
+      }
     }
   }
 
   /**
-   * Tracks temporary (short-lived) message
+   * Track main menu message
    * @param {number} userId
    * @param {number} messageId
    */
@@ -68,10 +88,11 @@ export class MessageStore {
     const data = this.ensureUser(userId)
 
     data.menu = messageId
+    this._dirty = true
   }
 
   /**
-   * Tracks temporary (short-lived) message
+   * Track temporary (short-lived) message
    * @param {number} userId
    * @param {number} messageId
    */
@@ -79,10 +100,11 @@ export class MessageStore {
     const data = this.ensureUser(userId)
 
     data.temp.push(messageId)
+    this._dirty = true
   }
 
   /**
-   * Track a product message
+   * Track product message
    * @param {number} userId
    * @param {number} productId
    * @param {number} messageId
@@ -91,18 +113,21 @@ export class MessageStore {
     const data = this.ensureUser(userId)
 
     data.products.set(productId, messageId)
+    this._dirty = true
   }
 
   /**
+   * Delete menu message
    * @param {number} userId
    * @param {number} chatId
-   * @return {Promise<void>}
    */
   async deleteMenu(userId, chatId) {
     const data = this.ensureUser(userId)
     const msgId = data.menu
 
-    if (!msgId) return
+    if (!msgId) {
+      return
+    }
 
     try {
       await this.bot.telegram.deleteMessage(chatId, msgId)
@@ -113,10 +138,11 @@ export class MessageStore {
     }
 
     data.menu = null
+    this._dirty = true
   }
 
   /**
-   * Deletes all temporary messages
+   * Delete all temporary messages
    * @param {number} userId
    * @param {number} chatId
    */
@@ -134,6 +160,7 @@ export class MessageStore {
     }
 
     data.temp = []
+    this._dirty = true
   }
 
   /**
@@ -146,17 +173,20 @@ export class MessageStore {
     const data = this.ensureUser(userId)
     const msgId = data.products.get(productId)
 
-    if (msgId) {
-      try {
-        await this.bot.telegram.deleteMessage(chatId, msgId)
-      } catch (err) {
-        if (!err.message.includes('message to delete not found')) {
-          console.error(`[MessageStore] Failed to delete product ${productId}:`, err.message)
-        }
-      }
-
-      data.products.delete(productId)
+    if (!msgId) {
+      return
     }
+
+    try {
+      await this.bot.telegram.deleteMessage(chatId, msgId)
+    } catch (err) {
+      if (!err.message.includes('message to delete not found')) {
+        console.error(`[MessageStore] Failed to delete product ${productId}:`, err.message)
+      }
+    }
+
+    data.products.delete(productId)
+    this._dirty = true
   }
 
   /**
@@ -178,10 +208,11 @@ export class MessageStore {
     }
 
     data.products.clear()
+    this._dirty = true
   }
 
-
   /**
+   * Deletes all tracked messages for a user
    * @param {number} userId
    * @param {number} chatId
    */
@@ -201,6 +232,97 @@ export class MessageStore {
       }
     }
 
-    this.users.set(userId, { products: new Map(), temp: [], menu: null })
+    this.users.set(userId, { products: new Map(), temp: [], menu: null, lastActive: Date.now() })
+    this._dirty = true
+  }
+
+  /**
+   * Save cache to disk
+   * @private
+   */
+  async save() {
+    if (!this._dirty) {
+      return
+    }
+
+    const data = {}
+
+    for (const [userId, info] of this.users.entries()) {
+      data[userId] = {
+        menu: info.menu,
+        temp: info.temp,
+        products: Object.fromEntries(info.products),
+        lastActive: info.lastActive
+      }
+    }
+
+    await fs.mkdir(path.dirname(STORE_PATH), { recursive: true })
+    await fs.writeFile(STORE_PATH, JSON.stringify(data))
+
+    this._dirty = false
+  }
+
+  /**
+   * Load cache from disk (skips old users)
+   * @private
+   */
+  async load() {
+    try {
+      const file = await fs.readFile(STORE_PATH, 'utf8')
+      const json = JSON.parse(file)
+      const now = Date.now()
+      const cutoff = TTL_DAYS * 86400000
+      let restored = 0
+
+      for (const [userId, info] of Object.entries(json)) {
+        if (now - (info.lastActive || 0) > cutoff) {
+          continue
+        }
+
+        this.users.set(Number(userId), {
+          products: new Map(Object.entries(info.products || {}).map(([k, v]) => [Number(k), v])),
+          temp: info.temp || [],
+          menu: info.menu || null,
+          lastActive: info.lastActive || now
+        })
+
+        restored++
+      }
+
+      console.log(`[MessageStore] restored ${restored} active users`)
+    } catch (err) {
+      if (err.code !== 'ENOENT') {
+        console.error('[MessageStore] Failed to load file:', err.message)
+      }
+    }
+  }
+
+  /**
+   * Removes inactive users from memory
+   * @param {number} ttlDays
+   */
+  cleanupInactive(ttlDays) {
+    const now = Date.now()
+    const cutoff = ttlDays * 86400000
+    let removed = 0
+
+    for (const [userId, info] of this.users.entries()) {
+      if (now - (info.lastActive || 0) > cutoff) {
+        this.users.delete(userId)
+        removed++
+      }
+    }
+
+    if (removed > 0) {
+      console.log(`[MessageStore] cleaned ${removed} inactive users`)
+      this._dirty = true
+    }
+  }
+
+  /**
+   * Persist cache before shutdown
+   */
+  async destroy() {
+    await this.save()
   }
 }
