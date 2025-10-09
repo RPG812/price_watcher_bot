@@ -1,19 +1,69 @@
 export class UserService {
-  // TODO добавить лог действий
   /**
    * @param {import('mongodb').Db} db
+   * @param {object} [options]
+   * @param {number} [options.ttlMs=600000]  // 10 минут
    */
-  constructor(db) {
+  constructor(db, { ttlMs = 10 * 60 * 1000 } = {}) {
     /** @type {import('mongodb').Collection<User>} */
     this.collection = db.collection('users')
+
+    this.cache = new Map()
+    this.ttlMs = ttlMs
   }
+
+  // ---------- INTERNAL ---------- //
+
+  /**
+   * @param {CacheEntry<User>} entry
+   * @returns {boolean}
+   */
+  _isCacheValid(entry) {
+    return entry && (Date.now() - entry.ts < this.ttlMs)
+  }
+
+  /**
+   * @param {number} userId
+   * @returns {User|null}
+   */
+  _getFromCache(userId) {
+    const entry = this.cache.get(userId)
+
+    if (!this._isCacheValid(entry)) {
+      this.cache.delete(userId)
+      return null
+    }
+
+    return entry.data
+  }
+
+  /**
+   * @param {User} user
+   */
+  _setCache(user) {
+    this.cache.set(user._id, { data: user, ts: Date.now() })
+  }
+
+  // ---------- CORE ---------- //
 
   /**
    * @param {number} userId
    * @returns {Promise<User|null>}
    */
   async findById(userId) {
-    return this.collection.findOne({ _id: userId })
+    const cached = this._getFromCache(userId)
+
+    if (cached) {
+      return cached
+    }
+
+    const user = await this.collection.findOne({ _id: userId })
+
+    if (user) {
+      this._setCache(user)
+    }
+
+    return user
   }
 
   /**
@@ -22,18 +72,30 @@ export class UserService {
    */
   async create(user) {
     await this.collection.insertOne(user)
-  }
-
-  /** @param {number} userId */
-  async updateActivity(userId) {
-    await this.collection.updateOne(
-      { _id: userId },
-      { $set: { lastActiveAt: new Date() } }
-    )
+    this._setCache(user)
   }
 
   /**
-   * Ensure user exists
+   * @param {number} userId
+   * @return {Promise<void>}
+   */
+  async updateActivity(userId) {
+    const now = new Date()
+
+    await this.collection.updateOne(
+      { _id: userId },
+      { $set: { lastActiveAt: now } }
+    )
+
+    const cached = this._getFromCache(userId)
+
+    if (cached) {
+      cached.lastActiveAt = now
+      this._setCache(cached)
+    }
+  }
+
+  /**
    * @param {TelegramUserInput} from
    * @returns {Promise<{ user: User, isNew: boolean }>}
    */
@@ -63,79 +125,133 @@ export class UserService {
     return { user: existing, isNew: false }
   }
 
-  // ------- Subscriptions ------- //
+  // ---------- SUBSCRIPTIONS ---------- //
 
   /**
-   * Get all subscriptions
    * @param {number} userId
    * @returns {Promise<UserSubscription[]>}
    */
   async getSubscriptions(userId) {
+    const cached = this._getFromCache(userId)
+
+    if (cached) {
+      return cached.subscriptions || []
+    }
+
     const user = await this.findById(userId)
 
     return user?.subscriptions || []
   }
 
   /**
-   * Save subscriptions
    * @param {number} userId
    * @param {UserSubscription[]} subscriptions
+   * @return {Promise<void>}
    */
   async setSubscriptions(userId, subscriptions) {
     await this.collection.updateOne(
       { _id: userId },
       { $set: { subscriptions } }
     )
-  }
 
-  /**
-   * Check if user has any subscriptions
-   * @param {number} userId
-   * @returns {Promise<boolean>}
-   */
-  async hasSubscriptions(userId) {
-    const user = await this.collection.findOne(
-      { _id: userId },
-      { projection: { subscriptions: 1 } }
-    )
+    const cached = this._getFromCache(userId)
 
-    return !!(user?.subscriptions?.length)
-  }
-
-  /**
-   * Add new subscription if not exists
-   * @param {number} userId
-   * @param {number} productId
-   * @param {number} optionId
-   */
-  async addSubscription(userId, productId, optionId) {
-    const subs = await this.getSubscriptions(userId)
-    const exists = subs.some(s => s.productId === productId && s.optionId === optionId)
-
-    if (!exists) {
-      subs.push({ productId, optionId })
-      await this.setSubscriptions(userId, subs)
+    if (cached) {
+      cached.subscriptions = subscriptions
+      this._setCache(cached)
     }
   }
 
   /**
-   * Remove subscription by productId and optionId
+   * @param {number} userId
+   * @returns {Promise<boolean>}
+   */
+  async hasSubscriptions(userId) {
+    const subs = await this.getSubscriptions(userId)
+
+    return subs.length > 0
+  }
+
+  /**
    * @param {number} userId
    * @param {number} productId
    * @param {number} optionId
+   * @return {Promise<void>}
    */
-  async removeSubscription(userId, productId, optionId) {
-    const subs = await this.getSubscriptions(userId)
-    const updated = subs.filter(s => !(s.productId === productId && s.optionId === optionId))
+  async addSubscription(userId, productId, optionId) {
+    const user = this._getFromCache(userId) || await this.findById(userId)
+
+    if (!user) {
+      return
+    }
+
+    const subs = user.subscriptions || []
+    const exists = subs.some(s => s.productId === productId && s.optionId === optionId)
+
+    if (exists) {
+      return
+    }
+
+    const updated = [...subs, { productId, optionId }]
+
+    user.subscriptions = updated
+    this._setCache(user)
 
     await this.setSubscriptions(userId, updated)
   }
 
   /**
-   * Remove all subscriptions
    * @param {number} userId
+   * @param {number} productId
+   * @param {number} optionId
+   * @return {Promise<void>}
+   */
+  async removeSubscription(userId, productId, optionId) {
+    const user = this._getFromCache(userId) || await this.findById(userId)
+
+    if (!user) {
+      return
+    }
+
+    const updated = /** @type {UserSubscription[]} */ (user.subscriptions || []).filter(
+      s => !(s.productId === productId && s.optionId === optionId)
+    )
+
+    user.subscriptions = updated
+    this._setCache(user)
+
+    await this.setSubscriptions(userId, updated)
+  }
+
+  /**
+   * @param {number} userId
+   * @return {Promise<void>}
    */
   async clearSubscriptions(userId) {
+    const user = this._getFromCache(userId) || await this.findById(userId)
+
+    if (!user) {
+      return
+    }
+
+    user.subscriptions = []
+    this._setCache(user)
+
     await this.setSubscriptions(userId, [])
+  }
+
+  // ---------- UTILS ---------- //
+
+  /**
+   * @return {void}
+   */
+  cleanupCache() {
+    const now = Date.now()
+
+    for (const [userId, entry] of this.cache.entries()) {
+      if (now - entry.ts > this.ttlMs) {
+        this.cache.delete(userId)
+      }
+    }
   }
 }

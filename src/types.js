@@ -72,8 +72,8 @@
 
 /**
  * @typedef {Object} UserMessages
- * @property {number[]} menus
- * @property {number[]} subs
+ * @property {number|null} menu
+ * @property {number[]} temp
  * @property {Map<number, number>} products - Map of productId → messageId
  */
 
@@ -86,9 +86,23 @@
  */
 
 /**
- * @typedef {import('telegraf').Context} Context
+ * @typedef {import('telegraf/types').Message} TgMsg
+ */
+
+/**
+ * @typedef {import('telegraf').Context & { match: RegExpMatchArray, message: { text: string} } } Context
  */
 
 /**
  * @typedef {import('telegraf').User | { id: number, username?: string, first_name?: string, last_name?: string }} TelegramUserInput
+ */
+
+/**
+ * @typedef {typeof import('./ui.mjs')} UiModule
+ */
+
+/**
+ * @typedef {object} CacheEntry
+ * @property {User} data
+ * @property {number} ts
  */

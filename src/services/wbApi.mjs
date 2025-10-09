@@ -159,8 +159,6 @@ export class WbApi {
    * @returns {Promise<ProductCard>}
    */
   async getCard(product) {
-    console.log('[getCard] product', product)
-
     const id = Number(product.id)
     const imageURL = this.buildImageUrl(product)
 
@@ -396,7 +394,7 @@ export class WbApi {
    * @param {object} dbProduct
    * @returns {{changes: Changes[], historyEntries: PriceHistoryEntry[], sizes: ProductSize[]}}
    */
-  async getDiffPrice(card, dbProduct) {
+  getDiffPrice(card, dbProduct) {
     const now = new Date()
     const dbSizes = Array.isArray(dbProduct?.sizes) ? dbProduct.sizes : []
     const dbByOption = new Map(dbSizes.map(s => [s.optionId, s]))
