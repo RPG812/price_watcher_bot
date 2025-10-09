@@ -203,10 +203,9 @@ export class UserService {
   /**
    * @param {number} userId
    * @param {number} productId
-   * @param {number} optionId
    * @return {Promise<void>}
    */
-  async removeSubscription(userId, productId, optionId) {
+  async removeSubscription(userId, productId) {
     const user = this._getFromCache(userId) || await this.findById(userId)
 
     if (!user) {
@@ -214,7 +213,7 @@ export class UserService {
     }
 
     const updated = /** @type {UserSubscription[]} */ (user.subscriptions || []).filter(
-      s => !(s.productId === productId && s.optionId === optionId)
+      s => !(s.productId === productId)
     )
 
     user.subscriptions = updated

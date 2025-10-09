@@ -341,6 +341,7 @@ export class TgBot {
     const productId = Number(ctx.match[1])
 
     const [product] = await this.api.getProducts([productId])
+
     if (!product) {
       await this.ui.sendProductNotFound(ctx)
       return
@@ -350,6 +351,7 @@ export class TgBot {
       const size = product.sizes[0]
 
       await this.userService.addSubscription(userId, productId, size.optionId)
+      await this.handleArticleInput(ctx, productId)
       await this.ui.sendSubscribed(ctx, product)
     } else {
       await this.ui.sendSizeSelector(ctx, product)
@@ -381,9 +383,8 @@ export class TgBot {
     }
 
     await this.userService.addSubscription(userId, productId, optionId)
-    await this.ui.sendSubscribed(ctx, product)
-
     await this.handleArticleInput(ctx, productId)
+    await this.ui.sendSubscribed(ctx, product)
   }
 
   /**
@@ -406,12 +407,12 @@ export class TgBot {
     const userId = ctx.from.id
     const chatId = ctx.chat.id
 
-    const [, productIdRaw, optionIdRaw] = ctx.match
+    const [, productIdRaw] = ctx.match
     const productId = Number(productIdRaw)
-    const optionId = Number(optionIdRaw)
 
-    await this.userService.removeSubscription(userId, productId, optionId)
+    await this.userService.removeSubscription(userId, productId)
     await this.msgStore.deleteProduct(userId, chatId, productId)
+
     await this.ui.sendUnsubscribed(ctx, productId)
   }
 
