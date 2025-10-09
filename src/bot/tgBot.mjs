@@ -229,6 +229,8 @@ export class TgBot {
   async handleText(ctx) {
     const userText = ctx.message.text.trim()
 
+    await this.msgStore.deleteUserMessage(ctx)
+
     if (userText.toLowerCase() === 'menu'){
       await this.showMainMenu(ctx)
       return
@@ -239,8 +241,6 @@ export class TgBot {
 
     // Try to extract a WB article (sequence of 5–10 digits)
     const match = userText.match(/\b\d{5,10}\b/)
-
-    await this.msgStore.deleteUserMessage(ctx)
 
     if (!match) {
       await this.ui.sendUnknownText(ctx)
