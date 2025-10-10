@@ -1,51 +1,32 @@
 /**
- * Wraps ui-module with automatic message tracking via MessageStore
- * @param {UiModule} uiModule
+ * Wraps UI module with automatic message tracking via MessageStore.
+ * @param {typeof import('./ui.mjs')} uiModule
  * @param {import('./messages.mjs').MessageStore} msgStore
- * @returns {UiModule} same shape as uiModule
+ * @returns {typeof uiModule}
  */
 export function createTrackedUi(uiModule, msgStore) {
   return new Proxy(uiModule, {
     get(target, prop) {
       const original = target[prop]
-      if (typeof original !== 'function') return original
 
-      return async (...args) => {
-        const ctx = args[0]
-        const userId = ctx.from?.id
-        const chatId = ctx.chat?.id
-        if (!userId || !chatId) {
-          return original(...args)
+      if (typeof original !== 'function' || typeof prop !== 'string' || !/^reply|send/.test(prop)) {
+        return original
+      }
+
+      return async (params = {}) => {
+        const meta = extractMeta(params)
+
+        if (!meta.chatId) {
+          return original(params)
         }
 
-        const isMenuCall = prop === 'sendMainMenu'
-        const product = args[1]?.product
+        const type = detectType(prop)
 
-        // 1) pre-cleanup
-        if (isMenuCall) {
-          // Меню заменяем на новое, но не трогаем temp/баннеры
-          await msgStore.deleteMenu(userId, chatId)
-        } else {
-          if (product?.id) {
-            await msgStore.deleteProduct(userId, chatId, product.id)
-          } else {
-            await msgStore.deleteTemp(userId, chatId)
-          }
-        }
+        await safeCleanup(msgStore, type, meta, prop)
 
-        // 2) send
-        const result = await original(...args)
+        const result = await original(params)
 
-        // 3) track
-        if (result && typeof result.message_id === 'number') {
-          if (isMenuCall) {
-            msgStore.trackMenu(userId, result.message_id)
-          } else if (result.photo && product?.id) {
-            msgStore.trackProduct(userId, product.id, result.message_id)
-          } else {
-            msgStore.trackTemp(userId, result.message_id)
-          }
-        }
+        safeTrack(msgStore, result, type, meta, prop)
 
         return result
       }
@@ -53,3 +34,112 @@ export function createTrackedUi(uiModule, msgStore) {
   })
 }
 
+// -------------------- Helpers -------------------- //
+
+/**
+ * Extracts identifiers (userId, chatId, productId) from params.
+ * @param {object} params
+ * @returns {{ userId: number|null, chatId: number|null, productId: number|null }}
+ */
+function extractMeta(params) {
+  const { ctx, chatId, card, productId, product } = params
+
+  let userId = null
+  let resolvedChatId = null
+
+  if (ctx) {
+    userId = ctx.from?.id || chatId || null
+    resolvedChatId = ctx.chat?.id || ctx.message?.chat?.id || chatId || null
+  } else if (chatId) {
+    userId = chatId
+    resolvedChatId = chatId
+  }
+
+  const resolvedProductId = productId || product?.id || card?.productId || null
+
+  return { userId, chatId: resolvedChatId, productId: resolvedProductId }
+}
+
+
+/**
+ * Detects message category based on function name.
+ * @param {string} prop
+ * @returns {'menu' | 'product' | 'temp'}
+ */
+function detectType(prop) {
+  if (prop.includes('MainMenu')) {
+    return 'menu'
+  }
+
+  if (prop.includes('ProductCard')) {
+    return 'product'
+  }
+
+  return 'temp'
+}
+
+/**
+ * Safely cleans up old messages before sending a new one.
+ * @param {MessageStore} msgStore
+ * @param {'menu'|'product'|'temp'} type
+ * @param {{ userId:number|null, chatId:number|null, productId:number|null }} meta
+ * @param {string} prop
+ */
+async function safeCleanup(msgStore, type, meta, prop) {
+  const { userId, chatId, productId } = meta
+
+  try {
+    switch (type) {
+      case 'menu':
+        await msgStore.deleteMenu(userId, chatId)
+
+        break
+      case 'product':
+        if (productId) {
+          await msgStore.deleteProduct(userId, chatId, productId)
+        }
+
+        break
+      default:
+        await msgStore.deleteTemp(userId, chatId)
+    }
+  } catch (err) {
+    console.warn(`[TrackedUi] cleanup failed in ${prop}: ${err.message}`)
+  }
+}
+
+/**
+ * Safely tracks sent messages for later cleanup.
+ * @param {MessageStore} msgStore
+ * @param {any} result
+ * @param {'menu'|'product'|'temp'} type
+ * @param {{ userId:number|null, chatId:number|null, productId:number|null }} meta
+ * @param {string} prop
+ */
+function safeTrack(msgStore, result, type, meta, prop) {
+  const { userId, productId } = meta
+  const messageId = result?.message_id
+
+  if (!messageId) {
+    return
+  }
+
+  try {
+    switch (type) {
+      case 'menu':
+        msgStore.trackMenu(userId, messageId)
+
+        break
+      case 'product':
+        if (productId) {
+          msgStore.trackProduct(userId, productId, messageId)
+        }
+
+        break
+      default:
+        msgStore.trackTemp(userId, messageId)
+    }
+  } catch (err) {
+    console.warn(`[TrackedUi] tracking failed in ${prop}: ${err.message}`)
+  }
+}
