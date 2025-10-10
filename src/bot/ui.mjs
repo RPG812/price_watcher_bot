@@ -1,12 +1,40 @@
 import { Markup } from 'telegraf'
 
+// ----- SEND ----- //
+
 /**
- * Send welcome message for new user
- * @param {Context} ctx
- * @param {string} firstName
+ * Send product card directly to user (no ctx)
+ * @param {object} params
+ * @param {Bot} params.bot
+ * @param {number} params.chatId
+ * @param {{ photo: string, options: ProductCardMessageOptions }} params.card
  * @returns {Promise<TgMsg>}
  */
-export async function sendWelcome(ctx, firstName) {
+export async function sendProductCardPush({bot, chatId, card}) {
+  return bot.telegram.sendPhoto(chatId, card.photo, card.options)
+}
+
+// ----- REPLY ----- //
+
+/**
+ * Reply to user with product card via ctx
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {{ photo: string, options: ProductCardMessageOptions }} params.card
+ * @returns {Promise<TgMsg>}
+ */
+export async function replyWithProductCard({ctx, card}) {
+  return ctx.replyWithPhoto(card.photo, card.options)
+}
+
+/**
+ * Send welcome message for new user
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {string} params.firstName
+ * @returns {Promise<TgMsg>}
+ */
+export async function replyWelcome({ctx, firstName}) {
   return await ctx.reply(
     `Привет, ${firstName || 'друг'}! 👋\n\n` +
     'Я бот для отслеживания цен на товары Wildberries.\n' +
@@ -19,20 +47,22 @@ export async function sendWelcome(ctx, firstName) {
 
 /**
  * Send message for returning user
- * @param {Context} ctx
- * @param {string} firstName
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {string} params.firstName
  * @returns {Promise<TgMsg>}
  */
-export async function sendWelcomeBack(ctx, firstName) {
+export async function replyWelcomeBack({ctx, firstName}) {
   return await ctx.reply(`С возвращением, ${firstName || 'друг'}! 👋`)
 }
 
 /**
- * @param {Context} ctx
- * @param {boolean} hasSubscriptions
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {boolean} params.hasSubscriptions
  * @returns {Promise<TgMsg>}
  */
-export async function sendMainMenu(ctx, hasSubscriptions) {
+export async function replyMainMenu({ctx, hasSubscriptions}) {
   const buttons = [
     [{ text: '📋 Мои подписки', callback_data: 'subscriptions' }],
     [{ text: '➕ Добавить товар', callback_data: 'addProduct' }]
@@ -46,22 +76,24 @@ export async function sendMainMenu(ctx, hasSubscriptions) {
 }
 
 /**
- * @param {Context} ctx
+ * @param {object} params
+ * @param {Context} params.ctx
  * @returns {Promise<TgMsg>}
  */
-export async function sendAddProductHint(ctx) {
+export async function replyAddProductHint({ctx}) {
   return await ctx.reply('Пришли артикул или ссылку на товар на WB, и я покажу карточку 📦')
 }
 
 /**
- * @param {Context} ctx
+ * @param {object} params
+ * @param {Context} params.ctx
  * @returns {Promise<TgMsg>}
  */
-export async function sendUnsubAllConfirm(ctx) {
+export async function replyUnsubAllConfirm({ctx}) {
   return await ctx.reply(
     '⚠️ Ты уверен? Это удалит все твои подписки!',
     Markup.inlineKeyboard([
-      [{ text: '✅ Да, удалить все', callback_data: 'unsubAllConfirm' }], // TODO
+      [{ text: '✅ Да, удалить все', callback_data: 'unsubAllConfirm' }],
       [{ text: '❌ Отмена', callback_data: 'cancel' }]
     ])
   )
@@ -69,12 +101,13 @@ export async function sendUnsubAllConfirm(ctx) {
 
 /**
  * Sends confirmation dialog before unsubscribing
- * @param {Context} ctx
- * @param {number} productId
- * @param {number} optionId
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {number} params.productId
+ * @param {number} params.optionId
  * @returns {Promise<TgMsg>}
  */
-export async function sendUnsubConfirm(ctx, productId, optionId) {
+export async function replyUnsubConfirm({ctx, productId, optionId}) {
   return await ctx.reply(
     '⚠️ Ты уверен, что хочешь отписаться от этого товара?',
     Markup.inlineKeyboard([
@@ -85,30 +118,33 @@ export async function sendUnsubConfirm(ctx, productId, optionId) {
 }
 
 /**
- * @param {Context} ctx
+ * @param {object} params
+ * @param {Context} params.ctx
  * @returns {Promise<TgMsg>}
  */
-export async function sendProductNotFound(ctx) {
+export async function replyProductNotFound({ctx}) {
   return await ctx.reply('⚠️ Товар не найден или больше не доступен')
 }
 
 /**
  * Sends confirmation message after successful subscription
- * @param {Context} ctx
- * @param {ProductCard} product
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {ProductCard} params.product
  * @returns {Promise<TgMsg>}
  */
-export async function sendSubscribed(ctx, product) {
+export async function replySubscribed({ctx, product}) {
   return await ctx.reply(`Начинаю следить за товаром ${product.id} 👀`)
 }
 
 /**
- * @param {Context} ctx
- * @param {UserService} userService
- * @param {WbApi} api
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {UserService} params.userService
+ * @param {WbApi} params.api
  * @returns {Promise<TgMsg>}
  */
-export async function sendSubscriptionsInfo(ctx, userService, api) {
+export async function replySubscriptionsInfo({ctx, userService, api}) {
   const userId = ctx.from.id
   const subs = await userService.getSubscriptions(userId)
 
@@ -127,54 +163,13 @@ export async function sendSubscriptionsInfo(ctx, userService, api) {
 }
 
 /**
- * Sends product card with info and action buttons
- * @param {Context} ctx
- * @param {{
- *   product: ProductCard,
- *   isSubscribed?: boolean,
- *   displaySize?: string|null,
- *   displayPrice?: number|null
- * }} params
- * @returns {Promise<TgMsg>}
- */
-export async function sendProductCard(ctx, { product, isSubscribed = false, displaySize = null, displayPrice = null }) {
-  const price = displayPrice ? `${displayPrice.toLocaleString()} ₽` : '—'
-
-  const sizeLine = displaySize ? `\n📏 Размер: ${displaySize}` : ''
-  const ratingLine = product.rating ? `⭐️ ${product.rating} (${product.feedbacks} отзывов)` : ''
-
-  const caption =
-    `📦 ${product.name}\n\n` +
-    `💰 Цена: ${price}${sizeLine}\n` +
-    (ratingLine ? ratingLine + '\n' : '') +
-    `🔢 Артикул: ${product.id}\n` +
-    (product.brand ? `🏷 Бренд: ${product.brand}\n` : '') +
-    (product.supplier ? `👤 Продавец: ${product.supplier}\n` : '') +
-    `\n🔗 [Открыть на WB](${product.link})`
-
-  const buttons = [
-    [
-      isSubscribed
-        ? { text: '❌ Отписаться', callback_data: `unsub:${product.id}:${product.sizes.find(s => s.optionId)?.optionId || 0}` }
-        : { text: '✅ Подписаться', callback_data: `subscribe:${product.id}` }
-    ],
-    [{ text: '🏠 Главное меню', callback_data: 'menu' }]
-  ]
-
-  return await ctx.replyWithPhoto(product.imageURL, {
-    caption,
-    parse_mode: 'Markdown',
-    ...Markup.inlineKeyboard(buttons)
-  })
-}
-
-/**
  * Sends size selector when product has multiple sizes
- * @param {Context} ctx
- * @param {ProductCard} product
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {ProductCard} params.product
  * @returns {Promise<TgMsg>}
  */
-export async function sendSizeSelector(ctx, product) {
+export async function replySizeSelector({ctx, product}) {
   const sizeButtons = product.sizes.map(s => {
     const label = `${s.name} — ${s.currentPrice.toLocaleString()} ₽`
 
@@ -189,47 +184,134 @@ export async function sendSizeSelector(ctx, product) {
 
 
 /**
- * @param {Context} ctx
+ * @param {object} params
+ * @param {Context} params.ctx
  * @returns {Promise<TgMsg>}
  */
-export async function sendUnknownText(ctx) {
+export async function replyUnknownText({ ctx }) {
   return await ctx.reply('😕 К сожалению, я тебя не понял. Вот меню')
 }
 
 /**
  * Sends message when subscribed size no longer exists
- * @param {Context} ctx
+ * @param {object} params
+ * @param {Context} params.ctx
  * @returns {Promise<TgMsg>}
  */
-export async function sendProductOutdated(ctx) {
+export async function replyProductOutdated({ ctx }) {
   return await ctx.reply('⚠️ Похоже, выбранный размер больше недоступен')
 }
 
 /**
  * Sends short "subscription removed" message
- * @param {Context} ctx
- * @param {number} productId
+ * @param {object} params
+ * @param {Context} params.ctx
+ * @param {number} params.productId
  * @returns {Promise<TgMsg>}
  */
-export async function sendUnsubscribed(ctx, productId) {
+export async function replyUnsubscribed({ ctx, productId }) {
   return await ctx.reply(`✅ Подписка на ${productId} удалена`)
 }
 
 /**
  * Sends message after removing all subscriptions
- * @param {Context} ctx
+ * @param {object} params
+ * @param {Context} params.ctx
  * @returns {Promise<TgMsg>}
  */
-export async function sendUnsubAllDone(ctx) {
+export async function replyUnsubAllDone({ ctx }) {
   return await ctx.reply('✅ Все твои подписки удалены')
 }
 
 /**
  * Sends error message
- * @param {Context} ctx
+ * @param {object} params
+ * @param {Context} params.ctx
  * @returns {Promise<TgMsg>}
  */
-export async function sendError(ctx) {
+export async function replyError({ ctx }) {
   return await ctx.reply('⚠️ Что-то пошло не так, попробуй позже')
 }
 
+// ----- BUILD ----- //
+
+/**
+ * Build caption prefix for price change notification
+ * @param {number} prevPrice
+ * @param {number} currentPrice
+ * @returns {string}
+ */
+export function buildPriceChangePrefix(prevPrice, currentPrice) {
+  const diff = currentPrice - prevPrice
+  const percent = prevPrice ? (diff / prevPrice) * 100 : 0
+
+  const isDecrease = diff < 0
+  const arrow = isDecrease ? '🟢' : '🔴'
+  const verb = isDecrease ? 'снизилась' : 'увеличилась'
+  const sign = isDecrease ? '-' : '+'
+
+  return `*${arrow} Цена ${verb} на ${Math.abs(diff).toLocaleString()} ₽ (${sign}${Math.abs(percent).toFixed(1)}%)*\n\n`
+}
+
+/**
+ * Build product card message data
+ * @param {ProductCard} product
+ * @param {object} [opts]
+ * @param {boolean} [opts.isSubscribed]
+ * @param {number|null} [opts.displayPrice]
+ * @param {string|null} [opts.displaySize]
+ * @param {string} [opts.captionPrefix]
+ * @returns {{ productId: number, photo: string, options: ProductCardMessageOptions }}
+ */
+export function buildProductCard(product, {
+  isSubscribed = false,
+  displaySize = null,
+  displayPrice = null,
+  captionPrefix = ''
+} = {}) {
+  const e = escapeMarkdown
+
+  const price = displayPrice ? `${displayPrice.toLocaleString()} ₽` : '—'
+  const sizeLine = displaySize ? `\n📏 Размер: ${e(displaySize)}` : ''
+  const ratingLine = product.rating ? `⭐️ ${e(String(product.rating))} (${e(String(product.feedbacks))} отзывов)` : ''
+
+  const caption =
+    captionPrefix +
+    `📦 *${e(product.name)}*\n\n` +
+    `💰 Цена: *${e(price)}*${sizeLine}\n` +
+    (ratingLine ? ratingLine + '\n' : '') +
+    `🔢 Артикул: ${product.id}\n` +
+    (product.brand ? `🏷 Бренд: ${e(product.brand)}\n` : '') +
+    (product.supplier ? `👤 Продавец: ${e(product.supplier)}\n` : '') +
+    `\n🔗 [Открыть на WB](${product.link})`
+
+  const buttons = [
+    [
+      isSubscribed
+        ? { text: '❌ Отписаться', callback_data: `unsub:${product.id}:${product.sizes.find(s => s.optionId)?.optionId || 0}` }
+        : { text: '✅ Подписаться', callback_data: `subscribe:${product.id}` }
+    ],
+    [{ text: '🏠 Главное меню', callback_data: 'menu' }]
+  ]
+
+  return {
+    productId: product.id,
+    photo: product.imageURL,
+    options: {
+      caption,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: buttons }
+    }
+  }
+}
+
+// ----- UTILS ----- //
+
+/**
+ * Escape text for Markdown (basic)
+ * @param {string} text
+ * @returns {string}
+ */
+function escapeMarkdown(text = '') {
+  return text.replace(/[*_]/g, '')
+}

@@ -19,11 +19,12 @@ export class MessageStore {
     this.users = new Map()
 
     this._dirty = false
+    this._saving = false
 
     this.load().catch(err => console.error('[MessageStore] Failed to load cache:', err.message))
 
-    setInterval(() => this.save().catch(() => {}), 60_000)
-    setInterval(() => this.cleanupInactive(TTL_DAYS), 60 * 60 * 1000)
+    this.saveIntId = setInterval(() => this.save().catch(() => {}), 60_000)
+    this.cleanupIntId = setInterval(() => this.cleanupInactive(TTL_DAYS), 60 * 60 * 1000)
   }
 
   /**
@@ -241,26 +242,33 @@ export class MessageStore {
    * @private
    */
   async save() {
-    if (!this._dirty) {
+    if (this._saving || !this._dirty) {
       return
     }
 
-    const data = {}
+    this._saving = true
 
-    for (const [userId, info] of this.users.entries()) {
-      data[userId] = {
-        menu: info.menu,
-        temp: info.temp,
-        products: Object.fromEntries(info.products),
-        lastActive: info.lastActive
+    try {
+      const data = {}
+
+      for (const [userId, info] of this.users.entries()) {
+        data[userId] = {
+          menu: info.menu,
+          temp: info.temp,
+          products: Object.fromEntries(info.products),
+          lastActive: info.lastActive
+        }
       }
+
+      await fs.mkdir(path.dirname(STORE_PATH), { recursive: true })
+      await fs.writeFile(STORE_PATH, JSON.stringify(data))
+
+      this._dirty = false
+    } finally {
+      this._saving = false
     }
-
-    await fs.mkdir(path.dirname(STORE_PATH), { recursive: true })
-    await fs.writeFile(STORE_PATH, JSON.stringify(data))
-
-    this._dirty = false
   }
+
 
   /**
    * Load cache from disk (skips old users)
@@ -323,6 +331,9 @@ export class MessageStore {
    * Persist cache before shutdown
    */
   async destroy() {
+    clearInterval(this.saveIntId)
+    clearInterval(this.cleanupIntId)
+
     await this.save()
   }
 }

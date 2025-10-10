@@ -12,8 +12,8 @@ await bot.start()
 await api.startPriceWatcher(bot)
 
 process.on('SIGINT', async () => {
-  console.log('Shutting down gracefully...')
-  await bot.msgStore.destroy()
+  console.log('Shutting down...')
+  await api.stopPriceWatcher()
   await bot.stop('SIGINT')
   process.exit(0)
 })

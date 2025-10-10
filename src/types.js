@@ -1,4 +1,55 @@
 /**
+ * @typedef {typeof import('./ui.mjs')} UiModule
+ */
+
+/**
+ * @typedef {import('telegraf').Telegraf<Context>} Bot
+ */
+
+/**
+ * @typedef {object} CacheEntry
+ * @property {User} data
+ * @property {number} ts
+ */
+
+// ----- CONTEXT ----- //
+
+/**
+ * @typedef {import('telegraf/types').Message} BaseTgMsg
+ */
+
+/**
+ * @typedef {BaseTgMsg & {
+ *   text?: string
+ * }} TgMsg
+ */
+
+/**
+ * @typedef {object} TgUpdate
+ * @property {TgMsg} [message]
+ */
+
+/**
+ * @typedef {import('telegraf/types').User & {
+ *   id: number
+ *   username?: string
+ *   first_name?: string
+ *   last_name?: string
+ * }} TelegramUserInput
+ */
+
+/**
+ * @typedef {import('telegraf').Context & {
+ *   from?: TelegramUserInput
+ *   update?: TgUpdate
+ *   message?: TgMsg
+ *   match?: RegExpMatchArray
+ * }} Context
+ */
+
+// ----- USER ----- //
+
+/**
  * @typedef {object} User
  * @property {number} _id userId
  * @property {string} [username]
@@ -14,6 +65,16 @@
  * @property {number} productId
  * @property {number} optionId
  */
+
+/**
+ * @typedef {Object} UserMessages
+ * @property {number|null} menu
+ * @property {number[]} temp
+ * @property {Map<number, number>} products - Map of productId → messageId
+ * @property {number} lastActive
+ */
+
+// ----- PRODUCT ----- //
 
 /**
  * @typedef {object} ProductCard
@@ -71,39 +132,43 @@
  */
 
 /**
- * @typedef {Object} UserMessages
- * @property {number|null} menu
- * @property {number[]} temp
- * @property {Map<number, number>} products - Map of productId → messageId
- * @property {number} lastActive
+ * @typedef {object} ProductCardMessageOptions
+ * @property {string} caption
+ * @property {'Markdown'|'MarkdownV2'|'HTML'} parse_mode
+ * @property {{ inline_keyboard: { text: string, callback_data: string }[][] }} reply_markup
+ */
+
+// ----- RAW PRODUCT ----- //
+
+/**
+ * @typedef {object} RawPrice
+ * @property {number} [basic]
+ * @property {number} [product]
+ * @property {number} [logistics]
+ * @property {number} [return]
  */
 
 /**
- * @typedef {'menus' | 'subs'} MessageType
+ * @typedef {object} RawSize
+ * @property {string} [name]
+ * @property {string} [origName]
+ * @property {number} [optionId]
+ * @property {RawPrice} [price]
+ * @property {number} [stock]
  */
 
 /**
- * @typedef {import('telegraf').Telegraf} Bot
- */
-
-/**
- * @typedef {import('telegraf/types').Message} TgMsg
- */
-
-/**
- * @typedef {import('telegraf').Context & { match: RegExpMatchArray, message: { text: string} } } Context
- */
-
-/**
- * @typedef {import('telegraf').User | { id: number, username?: string, first_name?: string, last_name?: string }} TelegramUserInput
- */
-
-/**
- * @typedef {typeof import('./ui.mjs')} UiModule
- */
-
-/**
- * @typedef {object} CacheEntry
- * @property {User} data
- * @property {number} ts
+ * @typedef {object} RawProduct
+ * @property {number|string} id
+ * @property {string} [name]
+ * @property {string} [brand]
+ * @property {string} [supplier]
+ * @property {string} [entity]
+ * @property {RawSize[]} [sizes]
+ * @property {number|string} [nmReviewRating]
+ * @property {number|string} [reviewRating]
+ * @property {number|string} [rating]
+ * @property {number|string} [nmFeedbacks]
+ * @property {number|string} [feedbacks]
+ * @property {number|string} [totalQuantity]
  */

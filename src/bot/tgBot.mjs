@@ -3,7 +3,7 @@ import { tg_token } from '../../auth/auth.mjs'
 import { MessageStore } from './messages.mjs'
 import { UserService } from './user-service.mjs'
 import { createTrackedUi } from './tracked-ui.mjs'
-import * as uiModule from './ui.mjs'
+import * as ui from './ui.mjs'
 
 export class TgBot {
   /**
@@ -16,7 +16,7 @@ export class TgBot {
     this.userService = new UserService(this.api.db)
 
     /** @type {typeof import('./ui.mjs')} */
-    this.ui = createTrackedUi(uiModule, this.msgStore)
+    this.ui = createTrackedUi(ui, this.msgStore)
   }
 
   /**
@@ -30,7 +30,7 @@ export class TgBot {
       console.log('[TgBot] polling started')
     }).catch(console.error)
 
-    setInterval(() => this.userService.cleanupCache(), 60 * 1000)
+    this.cleanupCacheIntId = setInterval(() => this.userService.cleanupCache(), 60_000)
 
     console.log('[TgBot] started')
   }
@@ -39,10 +39,14 @@ export class TgBot {
    * @param {string} [reason]
    * @returns {Promise<void>}
    */
-  async stop (reason = 'manual') {
+  async stop(reason = 'manual') {
     console.log(`[TgBot] stopping (${reason})...`)
 
+    clearInterval(this.cleanupCacheIntId)
+    await this.msgStore.destroy()
     await this.bot.stop(reason)
+
+    console.log('[TgBot] stopped cleanly')
   }
 
   /**
@@ -69,35 +73,36 @@ export class TgBot {
    * Middleware: auto-run handleStart for new users
    */
   initUserMiddleware() {
-    this.bot.use(async (ctx, next) => {
-      const id = ctx.from?.id
+    this.bot.use(/** @type {(ctx: Context, next: Function) => Promise<void>} */ (
+      async (ctx, next) => {
+        const id = ctx.from?.id
 
-      if (!id) {
-        return
-      }
-
-      try {
-        const user = await this.userService.findById(id)
-
-        if (!user) {
-          if (ctx.update?.message?.text === '/start') {
-            return next()
-          }
-
-          console.log(`[TgBot] First contact from user ${id} — redirecting to /start`)
-          await this.handleStart(ctx)
-
+        if (!id) {
           return
         }
 
-        await this.userService.updateActivity(user._id)
+        try {
+          const user = await this.userService.findById(id)
 
-        return next()
-      } catch (err) {
-        console.error(`[TgBot] Failed to ensure user ${id}: ${err.message}`)
-        return next()
-      }
-    })
+          if (!user) {
+            if (ctx.update?.message?.text === '/start') {
+              return next()
+            }
+
+            console.log(`[TgBot] First contact from user ${id} — redirecting to /start`)
+            await this.handleStart(ctx)
+
+            return
+          }
+
+          await this.userService.updateActivity(user._id)
+
+          return next()
+        } catch (err) {
+          console.error(`[TgBot] Failed to ensure user ${id}: ${err.message}`)
+          return next()
+        }
+      }))
   }
 
   /**
@@ -135,7 +140,7 @@ export class TgBot {
       console.error('[TgBot] Error:', err)
 
       try {
-        await this.ui.sendError(ctx)
+        await this.ui.replyError({ ctx })
       } catch (e) {
         console.error(`[TgBot] Failed to reply on error: ${e.message}`)
       }
@@ -154,10 +159,10 @@ export class TgBot {
     await this.msgStore.deleteUserMessage(ctx)
 
     if (isNew) {
-      await this.ui.sendWelcome(ctx, user.firstName)
+      await this.ui.replyWelcome({ctx, firstName: user.firstName})
       console.log(`[TgBot] new user ${user._id} created`)
     } else {
-      await this.ui.sendWelcomeBack(ctx, user.firstName)
+      await this.ui.replyWelcomeBack({ctx, firstName: user.firstName})
     }
 
     await this.showMainMenu(ctx)
@@ -170,7 +175,7 @@ export class TgBot {
   async showMainMenu(ctx) {
     const hasSubscriptions = await this.userService.hasSubscriptions(ctx.from.id)
 
-    await this.ui.sendMainMenu(ctx, hasSubscriptions)
+    await this.ui.replyMainMenu({ctx, hasSubscriptions})
   }
 
   /**
@@ -178,7 +183,7 @@ export class TgBot {
    * @returns {Promise<void>}
    */
   async handleSubscriptions(ctx) {
-    await this.ui.sendSubscriptionsInfo(ctx, this.userService, this.api)
+    await this.ui.replySubscriptionsInfo({ctx, userService: this.userService, api: this.api})
   }
 
   /**
@@ -186,7 +191,7 @@ export class TgBot {
    * @returns {Promise<void>}
    */
   async handleAddProduct(ctx) {
-    await this.ui.sendAddProductHint(ctx)
+    await this.ui.replyAddProductHint({ctx})
   }
 
   /**
@@ -225,7 +230,7 @@ export class TgBot {
     const match = userText.match(/\b\d{5,10}\b/)
 
     if (!match) {
-      await this.ui.sendUnknownText(ctx)
+      await this.ui.replyUnknownText({ ctx })
       await this.showMainMenu(ctx)
 
       return
@@ -266,12 +271,12 @@ export class TgBot {
    */
   async handleProduct(ctx, productId, { updateActivity = false, saveProduct = false } = {}) {
     const userId = ctx.from.id
-    const chatId = ctx.chat.id
+    // const chatId = ctx.chat.id
 
     const [product] = await this.api.getProducts([productId])
 
     if (!product) {
-      await this.ui.sendProductNotFound(ctx)
+      await this.ui.replyProductNotFound({ctx})
       return
     }
 
@@ -294,8 +299,8 @@ export class TgBot {
         displaySize = size.name
         displayPrice = size.currentPrice
       } else {
-        await this.userService.removeSubscription(userId, product.id, sub.optionId)
-        await this.ui.sendProductOutdated(ctx)
+        await this.userService.removeSubscription(userId, product.id)
+        await this.ui.replyProductOutdated({ ctx })
 
         return
       }
@@ -306,8 +311,13 @@ export class TgBot {
       displayPrice = avg?.currentPrice || product.sizes[0]?.currentPrice || 0
     }
 
-    await this.msgStore.deleteProduct(userId, chatId, productId)
-    await this.ui.sendProductCard(ctx, { product, isSubscribed, displaySize, displayPrice })
+    const card = ui.buildProductCard(product, {
+      isSubscribed,
+      displaySize,
+      displayPrice
+    })
+
+    await this.ui.replyWithProductCard({ctx, card})
 
     if (saveProduct) {
       await this.api.saveProduct(product)
@@ -325,7 +335,7 @@ export class TgBot {
     const [product] = await this.api.getProducts([productId])
 
     if (!product) {
-      await this.ui.sendProductNotFound(ctx)
+      await this.ui.replyProductNotFound({ctx})
       return
     }
 
@@ -334,9 +344,9 @@ export class TgBot {
 
       await this.userService.addSubscription(userId, productId, size.optionId)
       await this.handleArticleInput(ctx, productId)
-      await this.ui.sendSubscribed(ctx, product)
+      await this.ui.replySubscribed({ctx, product})
     } else {
-      await this.ui.sendSizeSelector(ctx, product)
+      await this.ui.replySizeSelector({ctx, product})
     }
   }
 
@@ -353,20 +363,20 @@ export class TgBot {
     const [product] = await this.api.getProducts([productId])
 
     if (!product) {
-      await this.ui.sendProductNotFound(ctx)
+      await this.ui.replyProductNotFound({ctx})
       return
     }
 
     const size = product.sizes.find(s => s.optionId === optionId)
 
     if (!size) {
-      await this.ui.sendProductOutdated(ctx)
+      await this.ui.replyProductOutdated({ ctx })
       return
     }
 
     await this.userService.addSubscription(userId, productId, optionId)
     await this.handleArticleInput(ctx, productId)
-    await this.ui.sendSubscribed(ctx, product)
+    await this.ui.replySubscribed({ctx, product})
   }
 
   /**
@@ -378,7 +388,7 @@ export class TgBot {
     const productId = Number(productIdRaw)
     const optionId = Number(optionIdRaw)
 
-    await this.ui.sendUnsubConfirm(ctx, productId, optionId)
+    await this.ui.replyUnsubConfirm({ctx, productId, optionId})
   }
 
   /**
@@ -395,7 +405,7 @@ export class TgBot {
     await this.userService.removeSubscription(userId, productId)
     await this.msgStore.deleteProduct(userId, chatId, productId)
 
-    await this.ui.sendUnsubscribed(ctx, productId)
+    await this.ui.replyUnsubscribed({ ctx, productId })
   }
 
   /**
@@ -403,7 +413,7 @@ export class TgBot {
    * @returns {Promise<void>}
    */
   async handleUnsubAllConfirm(ctx) {
-    await this.ui.sendUnsubAllConfirm(ctx)
+    await this.ui.replyUnsubAllConfirm({ctx})
   }
 
   /**
@@ -416,8 +426,35 @@ export class TgBot {
 
     await this.msgStore.deleteAllProducts(userId, chatId)
     await this.userService.clearSubscriptions(userId)
-    await this.ui.sendUnsubAllDone(ctx)
+    await this.ui.replyUnsubAllDone({ ctx })
 
     await this.showMainMenu(ctx)
+  }
+
+  /**
+   * Notify user about price change for a product
+   * @param {User} user
+   * @param {ProductCard} product
+   * @param {Array<{ optionId: number, name: string, prevPrice: number, currentPrice: number }>} changes
+   * @returns {Promise<void>}
+   */
+  async notifyPriceChange(user, product, changes) {
+    const chatId = user._id
+    try {
+      const { currentPrice, prevPrice } = changes[0]
+      const captionPrefix = ui.buildPriceChangePrefix(prevPrice, currentPrice)
+
+      const card = ui.buildProductCard(product, {
+        isSubscribed: true,
+        displayPrice: currentPrice,
+        captionPrefix
+      })
+
+      await this.ui.sendProductCardPush({ bot: this.bot, chatId, card })
+
+      console.log(`[TgBot] notified user ${chatId} about price change for product ${product.id}`)
+    } catch (e) {
+      console.error(`[TgBot] failed to notify user ${chatId}:`, e.message)
+    }
   }
 }

@@ -128,7 +128,7 @@ export class WbApi {
         return []
       }
 
-      const data = await res.json()
+      const data = /** @type {{ products?: RawProduct[] }} */ await res.json()
 
       if (!data.products) {
         return []
@@ -153,9 +153,8 @@ export class WbApi {
     }
   }
 
-
   /**
-   * @param {object} product
+   * @param {RawProduct} product
    * @returns {Promise<ProductCard>}
    */
   async getCard(product) {
@@ -265,7 +264,7 @@ export class WbApi {
       }
 
       const arrayBuffer = await res.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
+      const buffer = /** @type {Buffer} */ Buffer.from(arrayBuffer)
 
       return `data:image/webp;base64,${buffer.toString('base64')}`
     } catch (e) {
@@ -295,31 +294,6 @@ export class WbApi {
     )
 
     console.log(`[mongo] product ${card.id} saved`)
-  }
-
-  /**
-   * @param {TgBot} bot
-   */
-  async startPriceWatcher(bot) {
-    if (this.priceWatcherId) {
-      console.warn('[WbApi] price watcher already running, skipping start')
-      return
-    }
-
-    console.log(`[WbApi] starting price watcher (${this.watchInterval / 1000}s interval)`)
-
-    this.priceWatcherId = setInterval(() => this.checkPrices(bot), this.watchInterval)
-  }
-
-  /**
-   * Stop periodic price checker
-   */
-  stopPriceWatcher() {
-    if (this.priceWatcherId) {
-      clearInterval(this.priceWatcherId)
-      this.priceWatcherId = null
-      console.log('[WbApi] price watcher stopped')
-    }
   }
 
   /**
@@ -405,7 +379,8 @@ export class WbApi {
 
     for (const size of card.sizes) {
       const prev = dbByOption.get(size.optionId)
-      const prevPrice = prev?.currentPrice ?? size.currentPrice
+      const prevPrice = (prev?.currentPrice ?? size.currentPrice) * (Math.random() * 0.2 - 0.1) // DEBUG
+      //      const prevPrice = prev?.currentPrice ?? size.currentPrice
 
       if (size.currentPrice !== prevPrice) {
         changes.push({
@@ -514,114 +489,29 @@ export class WbApi {
 
     console.log(`[WbApi] notified ${notifications.length} users`)
   }
-}
 
-// /**
-//  * Check all products that need update
-//  * @param {import('./tgBot.mjs').TgBot} bot
-//  */
-// async checkPrices(bot) {
-//   try {
-//     const usersCol = this.db.collection('users')
-//     const productsCol = this.db.collection('products')
-//     const historyCol = this.db.collection('price_history')
-//
-//     const users = await usersCol
-//       .find({ subscriptions: { $exists: true, $ne: [] } })
-//       .toArray()
-//
-//     const subscribedIds = [
-//       ...new Set(users.flatMap(u => u.subscriptions.map(s => s.productId)))
-//     ]
-//
-//     if (subscribedIds.length === 0) {
-//       console.log('[WbApi] no subscribed products, skipping check')
-//       return
-//     }
-//
-//     const threshold = new Date(Date.now() - this.threshold)
-//     const productsToCheck = await productsCol
-//       .find({
-//         id: { $in: subscribedIds },
-//         lastCheckedAt: { $lt: threshold }
-//       })
-//       .limit(100)
-//       .toArray()
-//
-//     if (productsToCheck.length === 0) {
-//       return
-//     }
-//
-//     console.log(`[WbApi] checking ${productsToCheck.length} products`)
-//
-//     const ids = productsToCheck.map(p => p.id)
-//     const freshCards = await this.getProducts(ids)
-//     const dbById = new Map(productsToCheck.map(p => [p.id, p]))
-//
-//     const productUpdates = []
-//     const allHistoryEntries = []
-//     const notifications = []
-//
-//     for (const card of freshCards) {
-//       const dbProduct = dbById.get(card.id)
-//       const { changes, historyEntries, sizes } = this.getDiffPrice(card, dbProduct)
-//
-//       const update = {
-//         $set: { lastCheckedAt: new Date() }
-//       }
-//
-//       if (changes.length > 0) {
-//         update.$set.sizes = sizes
-//       }
-//
-//       productUpdates.push({
-//         updateOne: {
-//           filter: { id: card.id },
-//           update,
-//           upsert: true
-//         }
-//       })
-//
-//       if (historyEntries.length > 0) {
-//         allHistoryEntries.push(...historyEntries)
-//       }
-//
-//       if (changes.length > 0) {
-//         const changedOptionIds = changes.map(c => c.optionId)
-//         const affectedUsers = users.filter(user =>
-//           user.subscriptions.some(
-//             s =>
-//               s.productId === card.id &&
-//               changedOptionIds.includes(s.optionId)
-//           )
-//         )
-//
-//         for (const user of affectedUsers) {
-//           const relevantChanges = changes.filter(c =>
-//             user.subscriptions.some(
-//               s => s.productId === card.id && s.optionId === c.optionId
-//             )
-//           )
-//
-//           notifications.push({ user, card, relevantChanges })
-//         }
-//       }
-//     }
-//
-//     if (productUpdates.length > 0) {
-//       await productsCol.bulkWrite(productUpdates, { ordered: false })
-//     }
-//
-//     if (allHistoryEntries.length > 0) {
-//       await historyCol.insertMany(allHistoryEntries)
-//     }
-//
-//     for (const { user, card, relevantChanges } of notifications) {
-//       await bot.notifyPriceChange(user, card, relevantChanges)
-//     }
-//
-//     console.log(`[WbApi] done: updated ${productUpdates.length} products, inserted ${allHistoryEntries.length} history entries`)
-//   } catch (e) {
-//     console.error('[WbApi] checkPrices error:', e.message)
-//   }
-// }
+  /**
+   * @param {TgBot} bot
+   */
+  async startPriceWatcher(bot) {
+    if (this.priceWatcherId) {
+      console.warn('[WbApi] price watcher already running, skipping start')
+      return
+    }
+
+    console.log(`[WbApi] starting price watcher (${this.watchInterval / 1000}s interval)`)
+
+    this.priceWatcherId = setInterval(() => this.checkPrices(bot), this.watchInterval)
+  }
+
+  /**
+   * Stop periodic price checker
+   */
+  stopPriceWatcher() {
+    if (this.priceWatcherId) {
+      clearInterval(this.priceWatcherId)
+      this.priceWatcherId = null
+      console.log('[WbApi] price watcher stopped')
+    }
+  }
+}
