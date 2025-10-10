@@ -118,6 +118,7 @@ export class TgBot {
     bot.command('menu', ctx => this.showMainMenu(ctx))
     bot.action('menu', ctx => this.showMainMenu(ctx))
     bot.action('cancel', ctx => this.handleCancel(ctx))
+    bot.action(/^delete:(\d+)$/, ctx => this.handleDeleteCard(ctx))
 
     bot.action('subscriptions', ctx => this.handleSubscriptions(ctx))
     bot.action('addProduct', ctx => this.handleAddProduct(ctx))
@@ -208,6 +209,25 @@ export class TgBot {
       console.error('[TgBot] Failed to delete user message:', e.message)
     }
   }
+
+  /**
+   * Executes product card deletion
+   * @param {Context} ctx
+   */
+  async handleDeleteCard(ctx) {
+      const userId = ctx.from.id
+      const chatId = ctx.chat.id
+      const [, productIdRaw] = ctx.match
+      const productId = Number(productIdRaw)
+
+    try {
+      await this.msgStore.deleteProduct(userId, chatId, productId)
+    } catch (err) {
+      console.error('[handleDeleteCard]', err)
+      await this.ui.replyError({ ctx })
+    }
+  }
+
 
   /**
    * @param {Context} ctx

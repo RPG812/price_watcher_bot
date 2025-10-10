@@ -379,8 +379,7 @@ export class WbApi {
 
     for (const size of card.sizes) {
       const prev = dbByOption.get(size.optionId)
-      const prevPrice = (prev?.currentPrice ?? size.currentPrice) * (Math.random() * 0.2 - 0.1) // DEBUG
-      //      const prevPrice = prev?.currentPrice ?? size.currentPrice
+      const prevPrice = prev?.currentPrice ?? size.currentPrice
 
       if (size.currentPrice !== prevPrice) {
         changes.push({

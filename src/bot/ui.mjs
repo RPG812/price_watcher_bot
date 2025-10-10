@@ -286,11 +286,14 @@ export function buildProductCard(product, {
     `\n🔗 [Открыть на WB](${product.link})`
 
   const buttons = [
-    [
-      isSubscribed
-        ? { text: '❌ Отписаться', callback_data: `unsub:${product.id}:${product.sizes.find(s => s.optionId)?.optionId || 0}` }
-        : { text: '✅ Подписаться', callback_data: `subscribe:${product.id}` }
-    ],
+    isSubscribed
+      ? [
+        { text: '❌ Отписаться', callback_data: `unsub:${product.id}:${product.sizes.find(s => s.optionId)?.optionId || 0}` }
+      ]
+      : [
+        { text: '✅ Подписаться', callback_data: `subscribe:${product.id}` },
+        { text: '❌ Удалить', callback_data: `delete:${product.id}` }
+      ],
     [{ text: '🏠 Главное меню', callback_data: 'menu' }]
   ]
 

@@ -212,30 +212,30 @@ export class MessageStore {
     this._dirty = true
   }
 
-  /**
-   * Deletes all tracked messages for a user
-   * @param {number} userId
-   * @param {number} chatId
-   */
-  async deleteAll(userId, chatId) {
-    const data = this.ensureUser(userId)
-    const all = [
-      ...data.temp.map(id => ({ id, type: 'temp' })),
-      ...Array.from(data.products.values()).map(id => ({ id, type: 'product' })),
-      ...(data.menu ? [{ id: data.menu, type: 'menu' }] : [])
-    ]
-
-    for (const { id, type } of all) {
-      try {
-        await this.bot.telegram.deleteMessage(chatId, id)
-      } catch (err) {
-        console.error(`[MessageStore] Failed to delete ${type} ${id}:`, err.message)
-      }
-    }
-
-    this.users.set(userId, { products: new Map(), temp: [], menu: null, lastActive: Date.now() })
-    this._dirty = true
-  }
+  // /**
+  //  * Deletes all tracked messages for a user
+  //  * @param {number} userId
+  //  * @param {number} chatId
+  //  */
+  // async deleteAll(userId, chatId) {
+  //   const data = this.ensureUser(userId)
+  //   const all = [
+  //     ...data.temp.map(id => ({ id, type: 'temp' })),
+  //     ...Array.from(data.products.values()).map(id => ({ id, type: 'product' })),
+  //     ...(data.menu ? [{ id: data.menu, type: 'menu' }] : [])
+  //   ]
+  //
+  //   for (const { id, type } of all) {
+  //     try {
+  //       await this.bot.telegram.deleteMessage(chatId, id)
+  //     } catch (err) {
+  //       console.error(`[MessageStore] Failed to delete ${type} ${id}:`, err.message)
+  //     }
+  //   }
+  //
+  //   this.users.set(userId, { products: new Map(), temp: [], menu: null, lastActive: Date.now() })
+  //   this._dirty = true
+  // }
 
   /**
    * Save cache to disk
