@@ -272,13 +272,16 @@ export function buildProductCard(product, {
   const e = escapeMarkdown
 
   const price = displayPrice ? `${displayPrice.toLocaleString()} ₽` : '—'
-  const sizeLine = displaySize ? `\n📏 Размер: ${e(displaySize)}` : ''
+  const wbPrice = displayPrice ? `${(Math.floor(displayPrice * 0.98)).toLocaleString()} ₽` : '—'
+  const sizeLine = displaySize ? `\n📏 Размер: ${e(displaySize)}\n` : ''
   const ratingLine = product.rating ? `⭐️ ${e(String(product.rating))} (${e(String(product.feedbacks))} отзывов)` : ''
 
   const caption =
     captionPrefix +
     `📦 *${e(product.name)}*\n\n` +
-    `💰 Цена: *${e(price)}*${sizeLine}\n` +
+    `💰 Цена: *${e(price)}*\n` +
+    `👛 Цена с WB кошельком: *${e(wbPrice)}*\n` +
+    sizeLine +
     (ratingLine ? ratingLine + '\n' : '') +
     `🔢 Артикул: ${product.id}\n` +
     (product.brand ? `🏷 Бренд: ${e(product.brand)}\n` : '') +

@@ -101,6 +101,7 @@
  * @property {number} stock
  * @property {number} originalPrice
  * @property {number} currentPrice
+ * @property {number} walletPrice
  * @property {number} [prevCurrentPrice]
  * @property {Date} [updateTime]
  */

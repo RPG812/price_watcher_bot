@@ -175,6 +175,7 @@ export class WbApi {
     const sizes = (product.sizes || []).map(size => {
       const originalPrice = size.price?.basic ? size.price.basic / 100 : 0
       const currentPrice = size.price?.product ? size.price.product / 100 : 0
+      const walletPrice = currentPrice ? Math.floor(currentPrice * 0.98) : 0 // TODO
 
       return {
         name: size.name || '',
@@ -182,6 +183,7 @@ export class WbApi {
         optionId: size.optionId || null,
         originalPrice,
         currentPrice,
+        walletPrice,
         stock: size.stock || 0
       }
     })
