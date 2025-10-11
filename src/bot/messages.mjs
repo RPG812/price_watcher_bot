@@ -1,9 +1,8 @@
-import { fileURLToPath } from 'url'
-import fs from 'fs/promises'
 import path from 'path'
+import fs from 'fs/promises'
+import process from 'node:process'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const STORE_PATH = path.resolve(__dirname, '../data/message-cache.json')
+const STORE_PATH = path.resolve(process.cwd(), 'data/message-cache.json')
 const TTL_DAYS = 7 // remove users inactive longer than 7 days
 
 /**
