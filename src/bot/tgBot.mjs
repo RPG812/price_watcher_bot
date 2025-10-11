@@ -9,7 +9,7 @@ export class TgBot {
   /**
    * @param {import('./wbApi.mjs').WbApi} api
    */
-  constructor (api) {
+  constructor(api) {
     this.api = api
     this.bot = new Telegraf(TG_TOKEN)
     this.msgStore = new MessageStore(this.bot)
@@ -17,21 +17,30 @@ export class TgBot {
 
     /** @type {typeof import('./ui.mjs')} */
     this.ui = createTrackedUi(ui, this.msgStore)
+
+    this.cleanupCacheIntId = null
   }
 
   /**
    * @returns {Promise<void>}
    */
-  async start () {
+  async start() {
     this.initUserMiddleware()
     this.initHandlers()
 
-    this.bot.launch().then(() => {
+    try {
+      await this.bot.launch()
       console.log('[TgBot] polling started')
-    }).catch(console.error)
+    } catch (e) {
+      // Graceful handling of 409 conflict on restart
+      if (e.description?.includes('terminated by other getUpdates request')) {
+        console.warn('[TgBot] polling already active elsewhere — continuing without launch')
+      } else {
+        throw e
+      }
+    }
 
     this.cleanupCacheIntId = setInterval(() => this.userService.cleanupCache(), 60_000)
-
     console.log('[TgBot] started')
   }
 
@@ -40,14 +49,26 @@ export class TgBot {
    * @returns {Promise<void>}
    */
   async stop(reason = 'manual') {
+    if (this._stopping) {
+      console.log(`[TgBot] stop() already in progress, skipping (${reason})`)
+      return
+    }
+
+    this._stopping = true
     console.log(`[TgBot] stopping (${reason})...`)
 
-    clearInterval(this.cleanupCacheIntId)
-    await this.msgStore.destroy()
-    await this.bot.stop(reason)
-
-    console.log('[TgBot] stopped cleanly')
+    try {
+      clearInterval(this.cleanupCacheIntId)
+      await this.msgStore.destroy()
+      await this.bot.stop(reason)
+      console.log('[TgBot] stopped cleanly')
+    } catch (err) {
+      console.error(`[TgBot] stop error: ${err.message}`)
+    } finally {
+      this._stopping = false
+    }
   }
+
 
   /**
    * Auto-patch Telegraf `bot.action` to always call `ctx.answerCbQuery()` first

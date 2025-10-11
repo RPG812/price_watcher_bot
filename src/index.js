@@ -3,30 +3,47 @@ import { TgBot } from './bot/tgBot.mjs'
 import process from 'node:process'
 
 const api = new WbApi('mongodb://localhost:27017', 'wb')
-await api.initDb()
-await api.setupMongo()
 
-const bot = new TgBot(api)
-await bot.start()
+try {
+  await api.initDb()
+  await api.setupMongo()
 
-await api.startPriceWatcher(bot)
+  const bot = new TgBot(api)
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, async () => {
+  try {
+    await bot.start()
+  } catch (err) {
+    console.error('[FATAL] Telegram bot failed to start:', err)
+    process.exit(1)
+  }
+
+  await api.startPriceWatcher(bot)
+
+  let shuttingDown = false
+
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => shutdown(signal))
+  }
+
+  async function shutdown(signal) {
+    if (shuttingDown) {
+      return
+    }
+
+    shuttingDown = true
     console.log(`Received ${signal}, shutting down...`)
-    await api.stopPriceWatcher()
-    await bot.stop(signal)
-    process.exit(0)
-  })
+
+    try {
+      await api.stopPriceWatcher()
+      await bot.stop(signal)
+    } catch (err) {
+      console.error('Shutdown error:', err)
+    } finally {
+      process.exit(0)
+    }
+  }
+} catch (err) {
+  console.error('[FATAL] Unexpected startup error:', err)
+  process.exit(1)
 }
 
-console.log('DONE')
-
-// const products = await api.getProducts([173990240])
-// console.log(products)
-// const products = await api.getProducts([70213027, 412107807, 498748698, 390778713])
-
-// for (const card of products) {
-//   await api.saveProduct(card)
-//   await api.getDiffPrice(card)
-// }
