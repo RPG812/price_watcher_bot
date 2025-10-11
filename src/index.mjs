@@ -22,6 +22,12 @@ try {
   await api.startPriceWatcher(bot)
   console.log(`[Main] app fully started (pid=${process.pid})`)
 
+  // signal PM2 that the app is ready
+  if (process.send) {
+    console.log('[Main] sending READY signal to PM2')
+    process.send('ready')
+  }
+
   let shuttingDown = false
 
   for (const signal of ['SIGINT', 'SIGTERM']) {

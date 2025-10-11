@@ -67,7 +67,7 @@ src/
 │   └── basketMap.mjs       # WB images baskets
 ├── data/
 │   └── message-cache.json  # Persistent message cache
-└── index.js                # Entry point
+└── index.mjs                # Entry point
 ```
 
 Architecture: hybrid — class-based services and functional modules.  
@@ -137,7 +137,7 @@ A public template is provided as `auth/auth.mjs.sample`.
 
 - Graceful shutdown (`SIGINT`) with persistent cache  
 - Pure async functions  
-- Single entry point (`index.js`)  
+- Single entry point (`index.mjs`)  
 - Auto-cleanup for inactive users (TTL in MessageStore)  
 - Persistent cache between restarts  
 

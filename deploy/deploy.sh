@@ -24,7 +24,6 @@ if [ -z "$SERVER_HOST" ]; then
   exit 1
 fi
 
-# --- Default port if not specified ---
 SERVER_PORT=${SERVER_PORT:-22}
 
 # === Rsync excludes ===
@@ -53,16 +52,19 @@ cd "$APP_DIR"
 echo "📥 Installing dependencies..."
 npm ci --omit=dev
 
-echo "🚀 Restarting PM2..."
+echo "🚀 Managing PM2 process..."
 if pm2 list | grep -q "$APP_NAME"; then
-  pm2 reload deploy/pm2.config.cjs --update-env
+  echo "🔄 App exists, performing graceful reload..."
+  pm2 reload "$APP_NAME" --update-env
 else
+  echo "🆕 Starting new PM2 app..."
   pm2 start deploy/pm2.config.cjs
 fi
+
 pm2 save
 
-echo "✅ Done! PM2 process list:"
-pm2 status
+echo "✅ PM2 process status:"
+pm2 status "$APP_NAME"
 EOF
 
 echo "✅ Deploy complete!"

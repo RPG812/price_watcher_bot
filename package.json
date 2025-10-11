@@ -2,7 +2,7 @@
   "name": "price-watcher",
   "version": "1.1.0",
   "description": "Telegram bot for tracking product prices",
-  "main": "src/index.js",
+  "main": "src/index.mjs",
   "type": "module",
   "private": true,
   "scripts": {
