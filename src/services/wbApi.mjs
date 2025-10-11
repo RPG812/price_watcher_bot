@@ -29,8 +29,8 @@ export class WbApi {
     this.db = null
 
     this.priceWatcherId = null
-    this.watchInterval = 60 * 1000
-    this.threshold = 60 * 1000
+    this.watchInterval = 5 * 60 * 1000
+    this.threshold = 60 * 60 * 1000
 
     this.notifiLimit = 5
   }
