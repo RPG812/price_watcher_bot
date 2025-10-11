@@ -11,12 +11,14 @@ await bot.start()
 
 await api.startPriceWatcher(bot)
 
-process.on('SIGINT', async () => {
-  console.log('Shutting down...')
-  await api.stopPriceWatcher()
-  await bot.stop('SIGINT')
-  process.exit(0)
-})
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, async () => {
+    console.log(`Received ${signal}, shutting down...`)
+    await api.stopPriceWatcher()
+    await bot.stop(signal)
+    process.exit(0)
+  })
+}
 
 console.log('DONE')
 
