@@ -272,7 +272,7 @@ export function buildProductCard(product, {
   const e = escapeMarkdown
 
   const price = displayPrice ? `${displayPrice.toLocaleString()} ₽` : '—'
-  const wbPrice = displayPrice ? `${(Math.floor(displayPrice * 0.98)).toLocaleString()} ₽` : '—'
+  const wbPrice = displayPrice ? `${(Math.floor(displayPrice * 0.94)).toLocaleString()} ₽` : '—' // TODO
   const sizeLine = displaySize ? `\n📏 Размер: ${e(displaySize)}\n` : ''
   const ratingLine = product.rating ? `⭐️ ${e(String(product.rating))} (${e(String(product.feedbacks))} отзывов)` : ''
 
