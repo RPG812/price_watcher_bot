@@ -28,19 +28,21 @@ export class TgBot {
     this.initUserMiddleware()
     this.initHandlers()
 
-    try {
-      await this.bot.launch()
-      console.log('[TgBot] polling started')
-    } catch (e) {
-      // Graceful handling of 409 conflict on restart
-      if (e.description?.includes('terminated by other getUpdates request')) {
-        console.warn('[TgBot] polling already active elsewhere — continuing without launch')
-      } else {
-        throw e
-      }
-    }
+    // Launch polling asynchronously, not blocking startup
+    this.bot.launch()
+      .then(() => {
+        console.log('[TgBot] polling started')
+      })
+      .catch(e => {
+        if (e.description?.includes('terminated by other getUpdates request')) {
+          console.warn('[TgBot] polling already active elsewhere — continuing without launch')
+        } else {
+          console.error('[TgBot] launch error:', e)
+        }
+      })
 
     this.cleanupCacheIntId = setInterval(() => this.userService.cleanupCache(), 60_000)
+
     console.log('[TgBot] started')
   }
 
