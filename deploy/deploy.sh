@@ -6,9 +6,16 @@ USERNAME="pwb"
 APP_NAME="price-watcher"
 APP_DIR="/home/$USERNAME/$APP_NAME"
 
-# --- Load SSH host and port from auth/auth.mjs ---
+AUTH_PATH="$(cd "$(dirname "$0")/../auth" && pwd)/auth.mjs"
+
+if [ ! -f "$AUTH_PATH" ]; then
+  echo "❌ auth/auth.mjs not found at $AUTH_PATH"
+  exit 1
+fi
+
+# shellcheck disable=SC2046
 read -r SERVER_HOST SERVER_PORT <<<$(node -e "
-  import { SERVER_HOST, SERVER_PORT } from '../auth/auth.mjs'
+  import { SERVER_HOST, SERVER_PORT } from 'file://$AUTH_PATH'
   console.log(SERVER_HOST, SERVER_PORT || '')
 ")
 
@@ -48,9 +55,9 @@ npm ci --omit=dev
 
 echo "🚀 Restarting PM2..."
 if pm2 list | grep -q "$APP_NAME"; then
-  pm2 reload pm2.config.js --update-env
+  pm2 reload deploy/pm2.config.cjs --update-env
 else
-  pm2 start pm2.config.js
+  pm2 start deploy/pm2.config.cjs
 fi
 pm2 save
 
@@ -59,4 +66,4 @@ pm2 status
 EOF
 
 echo "✅ Deploy complete!"
-echo "➡️  Logs: ssh -p $SERVER_PORT $USERNAME@$SERVER_HOST 'pm2 logs $APP_NAME --lines 50'"
+echo "✅ Bot is running and online!"
