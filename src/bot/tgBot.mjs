@@ -1,5 +1,5 @@
 import { Telegraf } from 'telegraf'
-import { tg_token } from '../../auth/auth.mjs'
+import { TG_TOKEN } from '../../auth/auth.mjs'
 import { MessageStore } from './messages.mjs'
 import { UserService } from './user-service.mjs'
 import { createTrackedUi } from './tracked-ui.mjs'
@@ -11,7 +11,7 @@ export class TgBot {
    */
   constructor (api) {
     this.api = api
-    this.bot = new Telegraf(tg_token)
+    this.bot = new Telegraf(TG_TOKEN)
     this.msgStore = new MessageStore(this.bot)
     this.userService = new UserService(this.api.db)
 

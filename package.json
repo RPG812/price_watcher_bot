@@ -1,20 +1,32 @@
 {
-  "name": "wb-bot",
-  "version": "1.0.0",
-  "description": "",
+  "name": "price-watcher",
+  "version": "1.1.0",
+  "description": "Telegram bot for tracking product prices",
   "main": "src/index.js",
+  "type": "module",
+  "private": true,
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "node --watch src/index.mjs",
-    "start": "node src/index.mjs",
+    "start": "pm2 start pm2.config.js && pm2 save",
+    "stop": "pm2 stop all",
+    "restart": "pm2 reload pm2.config.js --update-env",
+    "logs": "pm2 logs price-watcher",
+    "setup": "bash deploy/setup.sh",
+    "deploy": "bash deploy/deploy.sh",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "check": "npm run lint && npm run format -- --check"
   },
-  "private": true,
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
+  "keywords": [
+    "telegram",
+    "bot",
+    "nodejs",
+    "telegraf",
+    "price-tracker"
+  ],
+  "author": "Pavel Riabinin",
+  "license": "MIT",
   "devDependencies": {
     "@eslint/js": "^9.36.0",
     "eslint": "^9.36.0",
